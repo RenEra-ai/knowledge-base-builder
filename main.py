@@ -10,7 +10,6 @@ with open('config.json', 'r') as f:
     data = json.load(f)
 
 urls = data['urls']
-base_url = 'https://help.boomi.com'
 output_folder = 'knowledge_base'
 
 client = httpx.Client(
@@ -65,7 +64,7 @@ def extract_article_content(html):
     return str(content_div) if content_div else ""
 
 
-def fix_relative_urls(html):
+def fix_relative_urls(html, base_url):
     soup = BeautifulSoup(html, 'html.parser')
     for a in soup.find_all('a', href=True):
         href = a['href']
@@ -107,9 +106,12 @@ def process_url(url_obj, path, indent_level=0):
     url = url_obj['url']
     print(f"[{processed}/{total_urls}] Fetching: {url[:80]}...")
 
+    parsed = urlparse(url)
+    page_base_url = f"{parsed.scheme}://{parsed.netloc}"
+
     html = fetch_html(url)
     article_content = extract_article_content(html)
-    article_content = fix_relative_urls(article_content)
+    article_content = fix_relative_urls(article_content, page_base_url)
     article_content = remove_class_id_and_svg(article_content)
 
     soup = BeautifulSoup(article_content, 'html.parser')

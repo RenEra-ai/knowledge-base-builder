@@ -73,7 +73,7 @@ def normalize_url(href, base_url=BASE_URL):
     """Convert sidebar href to full absolute URL with proper encoding."""
     if href.startswith("http"):
         return href
-    return base_url + quote(href, safe="/:@")
+    return base_url + quote(href, safe="/:@%")
 
 
 def parse_sidebar_links(soup):
@@ -93,8 +93,10 @@ def parse_sidebar_links(soup):
         href = link.get("href", "")
         if not href or href.startswith("#"):
             continue
-        if href.startswith("http") and "boomi.com" not in href:
-            continue
+        if href.startswith("http"):
+            parsed_href = urlparse(href)
+            if parsed_href.netloc not in ("help.boomi.com", "developer.boomi.com"):
+                continue
 
         is_current = link.get("aria-current") == "page"
 
@@ -210,7 +212,7 @@ def crawl_category(url, client, delay, verbose, seen_urls, depth=0, base_url=BAS
     return {"url": url, "children": children}
 
 
-def crawl_section(name, root_url, client, delay, verbose):
+def crawl_section(name, root_url, client, delay, verbose, seen_urls):
     """Crawl a complete documentation section starting from its root URL."""
     print(f"\nCrawling section: {name}")
 
@@ -226,7 +228,6 @@ def crawl_section(name, root_url, client, delay, verbose):
     top_items = get_top_level_items(soup)
     print(f"  Found {len(top_items)} top-level items")
 
-    seen_urls = set()
     result = []
 
     for item in top_items:
@@ -302,11 +303,14 @@ def validate_sample(tree, client, sample_size=20):
             failures.append(f"ERROR: {url} — {e}")
 
     total = ok + fail
-    print(f"\nValidation: {ok}/{total} passed ({ok / total * 100:.0f}%)")
+    if total > 0:
+        print(f"\nValidation: {ok}/{total} passed ({ok / total * 100:.0f}%)")
+    else:
+        print("\nValidation: no URLs to validate")
     if failures:
         print("Failures:")
-        for f in failures:
-            print(f"  {f}")
+        for failure in failures:
+            print(f"  {failure}")
 
 
 def compare_trees(old_path, new_tree):
@@ -369,13 +373,14 @@ def main():
     client = make_client()
     try:
         tree = []
+        seen_urls = set()
         for section in sections:
             if section not in ROOT_URLS:
                 print(f"Unknown section: {section}")
                 print(f"Available: {', '.join(ROOT_URLS.keys())}")
                 continue
             tree.extend(
-                crawl_section(section, ROOT_URLS[section], client, args.delay, args.verbose)
+                crawl_section(section, ROOT_URLS[section], client, args.delay, args.verbose, seen_urls)
             )
 
         print_stats(tree)
