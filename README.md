@@ -1,6 +1,6 @@
 # Knowledge Base Builder
 
-This project scrapes Boomi documentation from `help.boomi.com` and converts the content into cleaned HTML files, organizing them into a hierarchical knowledge base.
+This project scrapes Boomi documentation from `help.boomi.com` and `developer.boomi.com` and converts the content into cleaned HTML files, organizing them into a hierarchical knowledge base.
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ python build_url_tree.py
 
 Options:
 - `--output FILE` — output path (default: `config.json`)
-- `--sections LIST` — comma-separated sections to crawl (default: `Integration`)
+- `--sections LIST` — comma-separated sections to crawl (default: all sections)
 - `--validate` — spot-check 20 random URLs after generation
 - `--delay SECS` — delay between requests (default: `1.0`)
 - `--verbose` — print each URL as it is discovered
