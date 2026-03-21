@@ -20,7 +20,13 @@ DEFAULT_INPUT = "knowledge_base/"
 DEFAULT_OUTPUT = "chunks.jsonl"
 DEFAULT_MIN_TOKENS = 100
 DEFAULT_MAX_TOKENS = 1200
-HEADING_TAGS = {"h1", "h2", "h3"}
+HEADING_TAGS = {f"h{i}" for i in range(1, 9)}
+
+
+def unwrap_divs(soup):
+    """Unwrap all <div> elements so headings/paragraphs become top-level children."""
+    for div in soup.find_all("div"):
+        div.unwrap()
 
 
 def estimate_tokens(text):
@@ -74,17 +80,18 @@ def is_breadcrumb_element(element):
 
 
 def split_on_headings(soup):
-    """Walk top-level children of soup, splitting into sections on h1/h2/h3 boundaries.
+    """Walk top-level children of soup, splitting into sections on heading boundaries.
 
     Returns a list of sections. Each section is a dict:
         {
-            "heading_tag": "h1" | "h2" | "h3" | None,
+            "heading_tag": "h1" .. "h8" | None,
             "heading_text": str,
             "breadcrumb": str,
             "source_url": str,
             "elements": [list of BS4 elements in this section],
         }
     """
+    unwrap_divs(soup)
     sections = []
     current = {
         "heading_tag": None,
@@ -168,6 +175,7 @@ def split_html_on_paragraphs(html_str, max_tokens):
     Returns a list of HTML strings, each under max_tokens.
     """
     soup = BeautifulSoup(html_str, "html.parser")
+    unwrap_divs(soup)
     children = [
         c for c in soup.children
         if isinstance(c, Tag) or (isinstance(c, NavigableString) and str(c).strip())
