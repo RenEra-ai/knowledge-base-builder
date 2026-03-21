@@ -1,20 +1,18 @@
 # Knowledge Base Builder
 
-This project scrapes specific web pages and converts the content into HTML files, organizing them into a knowledge base. The project uses Selenium for web scraping and BeautifulSoup for HTML parsing.
+This project scrapes Boomi documentation from `help.boomi.com` and converts the content into cleaned HTML files, organizing them into a hierarchical knowledge base.
 
 ## Prerequisites
 
 - Python 3.x
 - `pip` (Python package installer)
-- Google Chrome browser
-- ChromeDriver
 
 ## Installation
 
 1. **Clone the repository**:
 
     ```bash
-    git clone https://github.com/Glebuar/KnowledgeBaseBuilder.git
+    git clone https://github.com/RenEra-ai/knowledge-base-builder.git
     cd knowledge-base-builder
     ```
 
@@ -31,38 +29,30 @@ This project scrapes specific web pages and converts the content into HTML files
     pip install -r requirements.txt
     ```
 
-4. **Download ChromeDriver**:
+## Configuration
 
-    - Download the correct version of ChromeDriver that matches your Chrome browser from [here](https://developer.chrome.com/docs/chromedriver/downloads).
-    - Place the `chromedriver` executable in a known location.
+The `config.json` file contains the hierarchical URL tree to scrape:
 
-5. **Update `config.json`**:
-
-    - Make sure the `config.json` file is present in the root directory with the correct structure and update the `chrome_driver_path` to the path where you placed the `chromedriver` executable.
-
-    Example `config.json`:
-    ```json
-    {
-        "chrome_driver_path": "path/to/chromedriver",
-        "urls": [
-            {
-                "url": "https://example.com/page1",
-                "children": []
-            },
-            {
-                "url": "https://example.com/page2",
-                "children": [
-                    {
-                        "url": "https://example.com/page2-1",
-                        "children": []
-                    }
-                ]
-            }
-        ]
-    }
-    ```
+```json
+{
+    "urls": [
+        {
+            "url": "https://help.boomi.com/docs/...",
+            "children": [
+                {
+                    "url": "https://help.boomi.com/docs/...",
+                    "children": []
+                }
+            ]
+        }
+    ]
+}
+```
 
 ## Running the Script
 
 ```bash
 python main.py
+```
+
+Output HTML files are written to the `knowledge_base/` directory. Failed URLs (404s, timeouts) are logged to `knowledge_base/_failed_urls.txt`.

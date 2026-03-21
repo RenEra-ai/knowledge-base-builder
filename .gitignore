@@ -74,6 +74,9 @@ docs/_build/
 build/doctrees
 build/html
 
+# Documentation output
+docs/
+
 # PyBuilder
 target/
 

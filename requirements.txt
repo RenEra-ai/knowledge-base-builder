@@ -1,2 +1,2 @@
-selenium
+httpx
 beautifulsoup4
