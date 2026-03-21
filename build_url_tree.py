@@ -12,12 +12,13 @@ import os
 import random
 import shutil
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://help.boomi.com"
+DEV_BASE_URL = "https://developer.boomi.com"
 
 ROOT_URLS = {
     "Integration": BASE_URL + "/docs/Atomsphere/Integration/Getting%20started/"
@@ -26,6 +27,16 @@ ROOT_URLS = {
     "Flow": BASE_URL + "/docs/Atomsphere/Flow/Flow_overview",
     "Event Streams": BASE_URL + "/docs/Atomsphere/Event%20Streams/event_streams_overview",
     "Boomi for SAP": BASE_URL + "/docs/Atomsphere/Boomi_for_SAP/boomi_for_sap_overview",
+    "Platform REST APIs": DEV_BASE_URL + "/docs/APIs/PlatformAPI/Platform_APIs_Overview_New",
+    "Platform SOAP APIs": DEV_BASE_URL + "/docs/category/introduction-to-boomi-platform-soap-apis",
+    "GraphQL APIs": DEV_BASE_URL + "/docs/APIs/GraphQL",
+    "Connector APIs": DEV_BASE_URL + "/docs/APIs/Connectors/APIReference/Connectors_API_Overview",
+    "Platform Partner APIs": DEV_BASE_URL + "/docs/APIs/PlatformPartnerAPI/APIReference/Platform_Partner_APIs_Overview",
+    "Data Integration APIs": DEV_BASE_URL + "/docs/APIs/DataIntegration/DataIntegration_APIs_Overview",
+    "Managed File Transfer APIs": DEV_BASE_URL + "/docs/APIs/MFT/overview",
+    "Bundles APIs": DEV_BASE_URL + "/docs/APIs/Bundles/Bundles_overview",
+    "Audit Log Staging APIs": DEV_BASE_URL + "/docs/APIs/AuditLogStaging/APIReference/AuditLogStaging_Overview",
+    "Event Notifications REST APIs": DEV_BASE_URL + "/docs/APIs/EventNotifications/EventNotifications_overview",
 }
 
 
@@ -58,11 +69,11 @@ def fetch_page(url, client, delay, retries=3):
                 return None
 
 
-def normalize_url(href):
+def normalize_url(href, base_url=BASE_URL):
     """Convert sidebar href to full absolute URL with proper encoding."""
     if href.startswith("http"):
         return href
-    return BASE_URL + quote(href, safe="/:@")
+    return base_url + quote(href, safe="/:@")
 
 
 def parse_sidebar_links(soup):
@@ -82,7 +93,7 @@ def parse_sidebar_links(soup):
         href = link.get("href", "")
         if not href or href.startswith("#"):
             continue
-        if href.startswith("http") and "help.boomi.com" not in href:
+        if href.startswith("http") and "boomi.com" not in href:
             continue
 
         is_current = link.get("aria-current") == "page"
@@ -156,7 +167,7 @@ def get_children_of_current_page(soup):
     return children
 
 
-def crawl_category(url, client, delay, verbose, seen_urls, depth=0):
+def crawl_category(url, client, delay, verbose, seen_urls, depth=0, base_url=BASE_URL):
     """Recursively crawl a category page to build its URL subtree."""
     if url in seen_urls:
         return None
@@ -179,13 +190,13 @@ def crawl_category(url, client, delay, verbose, seen_urls, depth=0):
 
     children = []
     for child in child_items:
-        child_url = normalize_url(child["href"])
+        child_url = normalize_url(child["href"], base_url)
         if child_url in seen_urls:
             continue
 
         if child["is_category"]:
             node = crawl_category(
-                child_url, client, delay, verbose, seen_urls, depth + 1
+                child_url, client, delay, verbose, seen_urls, depth + 1, base_url
             )
         else:
             seen_urls.add(child_url)
@@ -203,6 +214,9 @@ def crawl_section(name, root_url, client, delay, verbose):
     """Crawl a complete documentation section starting from its root URL."""
     print(f"\nCrawling section: {name}")
 
+    parsed = urlparse(root_url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
     html = fetch_page(root_url, client, delay)
     if not html:
         print("  ERROR: Could not fetch root page")
@@ -216,11 +230,11 @@ def crawl_section(name, root_url, client, delay, verbose):
     result = []
 
     for item in top_items:
-        url = normalize_url(item["href"])
+        url = normalize_url(item["href"], base_url)
         print(f"\n  >> {item['text']}")
 
         if item["is_category"]:
-            node = crawl_category(url, client, delay, verbose, seen_urls, depth=1)
+            node = crawl_category(url, client, delay, verbose, seen_urls, depth=1, base_url=base_url)
         else:
             seen_urls.add(url)
             node = {"url": url, "children": []}
@@ -336,7 +350,7 @@ def main():
     parser.add_argument("--output", default="config.json", help="Output file path")
     parser.add_argument(
         "--sections",
-        default="Integration,Connectors,Flow,Event Streams,Boomi for SAP",
+        default=",".join(ROOT_URLS.keys()),
         help="Comma-separated doc sections to crawl",
     )
     parser.add_argument(
