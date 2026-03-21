@@ -1,2 +1,4 @@
 httpx
 beautifulsoup4
+chromadb
+sentence-transformers

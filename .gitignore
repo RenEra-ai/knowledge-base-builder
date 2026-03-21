@@ -129,3 +129,8 @@ venv.bak/
 # Windows
 Thumbs.db
 ehthumbs.db
+
+# Knowledge base build artifacts
+knowledge_base/
+chunks.jsonl
+boomi_knowledge_db/
