@@ -85,7 +85,7 @@ def get_dir_size(path):
     return total
 
 
-def print_stats(chunk_count, model_name, output_dir, elapsed):
+def print_stats(chunk_count, model_name, output_dir, elapsed, embedding_dim=None):
     """Print summary statistics for the index build."""
     size_bytes = get_dir_size(output_dir)
     if size_bytes >= 1024 * 1024:
@@ -98,6 +98,8 @@ def print_stats(chunk_count, model_name, output_dir, elapsed):
     print(f"{'=' * 60}")
     print(f"Chunks indexed:   {chunk_count:,}")
     print(f"Embedding model:  {model_name}")
+    if embedding_dim is not None:
+        print(f"Embedding dim:    {embedding_dim}")
     print(f"Index size:       {size_str}")
     print(f"Build time:       {elapsed:.1f} seconds")
     print(f"Output:           {output_dir}")
@@ -165,7 +167,10 @@ def main():
     build_index(chunks, collection, args.batch_size, args.verbose)
     elapsed = time.time() - start
 
-    print_stats(len(chunks), args.model, args.output, elapsed)
+    # Get embedding dimension from a sample
+    sample = collection.peek(limit=1, include=["embeddings"])
+    embedding_dim = len(sample["embeddings"][0]) if sample["embeddings"] else None
+    print_stats(len(chunks), args.model, args.output, elapsed, embedding_dim)
 
     if args.verify:
         verify_index(collection)
