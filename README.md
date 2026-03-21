@@ -1,6 +1,6 @@
 # Knowledge Base Builder
 
-This project scrapes Boomi documentation from `help.boomi.com` and `developer.boomi.com` and converts the content into cleaned HTML files, organizing them into a hierarchical knowledge base.
+This project scrapes Boomi documentation from `help.boomi.com` and `developer.boomi.com`, chunks the content into semantically meaningful pieces, and builds a ChromaDB vector database for semantic search.
 
 ## Prerequisites
 
@@ -56,8 +56,43 @@ python main.py
 
 Output HTML files are written to the `knowledge_base/` directory. Failed URLs (404s, timeouts) are logged to `knowledge_base/_failed_urls.txt`.
 
+### 3. Chunk the documentation
+
+`chunk_docs.py` splits HTML files into semantically meaningful chunks on heading boundaries, outputting structured JSONL with metadata:
+
+```bash
+python chunk_docs.py --verbose
+```
+
+Options:
+- `--input DIR` — input directory of HTML files (default: `knowledge_base/`)
+- `--output FILE` — output JSONL file (default: `chunks.jsonl`)
+- `--min-tokens N` — minimum chunk size in tokens (default: `100`)
+- `--max-tokens N` — maximum chunk size in tokens (default: `1200`)
+- `--verbose` — print each chunk as it is created
+
+### 4. Build the semantic index
+
+`build_index.py` embeds chunks and builds a ChromaDB vector database for semantic search:
+
+```bash
+python build_index.py --verify
+```
+
+Options:
+- `--input FILE` — input JSONL chunks file (default: `chunks.jsonl`)
+- `--output DIR` — output ChromaDB directory (default: `boomi_knowledge_db/`)
+- `--model NAME` — sentence transformer model (default: `all-MiniLM-L6-v2`)
+- `--batch-size N` — batch size for indexing (default: `200`)
+- `--verify` — run test queries after building
+- `--verbose` — print progress details
+
 ### Full workflow
 
 ```bash
-python build_url_tree.py --validate && python main.py
+python build_url_tree.py --validate && python main.py && python chunk_docs.py --verbose && python build_index.py --verify
 ```
+
+## Output
+
+The final artifact is `boomi_knowledge_db/` — a portable ChromaDB directory for downstream consumption (MCP server, RAG pipeline, etc.).
