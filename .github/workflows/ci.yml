@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install base dependencies
+      run: |
+        pip install httpx beautifulsoup4
+
+    - name: Syntax check all scripts
+      run: |
+        python -m py_compile main.py
+        python -m py_compile build_url_tree.py
+        python -m py_compile chunk_docs.py
+        python -m py_compile build_index.py
+
+    - name: Validate config.json
+      run: python -c "import json; json.load(open('config.json'))"
