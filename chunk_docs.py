@@ -310,8 +310,11 @@ def merge_small_chunks(raw_chunks, min_tokens):
     for chunk in raw_chunks[1:]:
         prev = merged[-1]
         prev_tokens = estimate_tokens(prev["content_text"])
+        same_page = (prev["source_url"] == chunk["source_url"]
+                     or not prev["source_url"]
+                     or not chunk["source_url"])
 
-        if prev_tokens < min_tokens:
+        if prev_tokens < min_tokens and same_page:
             prev["content_text"] = (prev["content_text"] + "\n" + chunk["content_text"]).strip()
             prev["content_html"] = (prev["content_html"] + "\n" + chunk["content_html"]).strip()
             if not prev["heading_text"] and chunk["heading_text"]:
@@ -323,9 +326,15 @@ def merge_small_chunks(raw_chunks, min_tokens):
             merged.append(chunk)
 
     if len(merged) > 1 and estimate_tokens(merged[-1]["content_text"]) < min_tokens:
-        last = merged.pop()
-        merged[-1]["content_text"] = (merged[-1]["content_text"] + "\n" + last["content_text"]).strip()
-        merged[-1]["content_html"] = (merged[-1]["content_html"] + "\n" + last["content_html"]).strip()
+        last = merged[-1]
+        prev = merged[-2]
+        same_page = (prev["source_url"] == last["source_url"]
+                     or not prev["source_url"]
+                     or not last["source_url"])
+        if same_page:
+            merged.pop()
+            prev["content_text"] = (prev["content_text"] + "\n" + last["content_text"]).strip()
+            prev["content_html"] = (prev["content_html"] + "\n" + last["content_html"]).strip()
 
     return merged
 
