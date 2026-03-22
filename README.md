@@ -61,6 +61,9 @@ Options:
 - `--output-dir DIR` — output directory for generated HTML files (default: `knowledge_base/`)
 - `--delay SECS` — delay between requests (default: `1.0`)
 - `--root-indices LIST` — scrape only the selected top-level root indices (used by GitHub Actions sharding)
+- `--failed-urls-file FILE` — write the failed URL report to a specific path
+
+Generated HTML filenames are prefixed with a short SHA-1 hash of the source URL so shard assembly is deterministic and collisions across similarly titled pages are avoided.
 
 ### 3. Chunk the documentation
 
@@ -98,6 +101,8 @@ Options:
 ```bash
 python build_url_tree.py --validate && python main.py && python chunk_docs.py --verbose && python build_index.py --verify
 ```
+
+GitHub Actions uses the same flow, but splits the scrape into four balanced shards and runs at most two of them in parallel to stay within workflow time limits and reduce load on Boomi.
 
 ## Output
 

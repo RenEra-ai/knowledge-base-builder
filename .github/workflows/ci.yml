@@ -25,8 +25,56 @@ jobs:
         python -m py_compile main.py
         python -m py_compile build_url_tree.py
         python -m py_compile build_scrape_matrix.py
+        python -m py_compile summarize_scrape_artifacts.py
+        python -m py_compile assemble_scrape_artifacts.py
         python -m py_compile chunk_docs.py
         python -m py_compile build_index.py
 
     - name: Validate config.json
       run: python -c "import json; json.load(open('config.json'))"
+
+    - name: Validate scrape shard matrix coverage
+      run: |
+        python - <<'PY'
+        import json
+        from build_scrape_matrix import build_matrix
+
+        with open("config.json", "r", encoding="utf-8") as f:
+            urls = json.load(f)["urls"]
+
+        matrix = build_matrix(urls, 4)["include"]
+        seen = []
+        for shard in matrix:
+            seen.extend(int(index) for index in shard["root_indices"].split(",") if index)
+
+        expected = list(range(len(urls)))
+        if sorted(seen) != expected:
+            raise SystemExit(
+                f"invalid matrix coverage: expected {expected}, got {sorted(seen)}"
+            )
+        PY
+
+    - name: Validate synthetic shard assembly
+      run: |
+        tmpdir="$(mktemp -d)"
+        mkdir -p "$tmpdir/artifacts"
+        mkdir -p "$tmpdir/shard0/knowledge_base/shard-0"
+        mkdir -p "$tmpdir/shard1/knowledge_base/shard-1"
+
+        printf '<h1>Shared Title</h1>\n' > "$tmpdir/shard0/knowledge_base/shard-0/aaaaaaaaaa_Shared_Title.html"
+        printf '<h1>Shared Title</h1>\n' > "$tmpdir/shard1/knowledge_base/shard-1/bbbbbbbbbb_Shared_Title.html"
+        printf 'https://example.com/a\n' > "$tmpdir/shard0/failed_urls_shard_0.txt"
+        printf 'https://example.com/b\n' > "$tmpdir/shard1/failed_urls_shard_1.txt"
+
+        tar -czf "$tmpdir/artifacts/knowledge-base-shard-0.tar.gz" -C "$tmpdir/shard0" knowledge_base failed_urls_shard_0.txt
+        tar -czf "$tmpdir/artifacts/knowledge-base-shard-1.tar.gz" -C "$tmpdir/shard1" knowledge_base failed_urls_shard_1.txt
+
+        python assemble_scrape_artifacts.py \
+          --artifacts-dir "$tmpdir/artifacts" \
+          --output-dir "$tmpdir/assembled" \
+          --failed-urls-output "$tmpdir/combined_failed_urls.txt"
+
+        test -f "$tmpdir/assembled/aaaaaaaaaa_Shared_Title.html"
+        test -f "$tmpdir/assembled/bbbbbbbbbb_Shared_Title.html"
+        grep -q 'https://example.com/a' "$tmpdir/combined_failed_urls.txt"
+        grep -q 'https://example.com/b' "$tmpdir/combined_failed_urls.txt"

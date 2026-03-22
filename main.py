@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -130,7 +131,13 @@ def build_breadcrumbs(path):
 
 
 def sanitize_filename(title):
-    return re.sub(r"[^a-zA-Z0-9_\-]", "_", title) + ".html"
+    return re.sub(r"[^a-zA-Z0-9_\-]", "_", title)
+
+
+def build_output_filename(title, url):
+    title_part = sanitize_filename(title).strip("_") or "document"
+    url_hash = hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
+    return f"{url_hash}_{title_part}.html"
 
 
 def process_url(url_obj, path, indent_level, client, failed_urls, delay, state):
@@ -149,7 +156,7 @@ def process_url(url_obj, path, indent_level, client, failed_urls, delay, state):
     soup = BeautifulSoup(article_content, "html.parser")
     first_heading = soup.find("h1")
     title = first_heading.text if first_heading else url
-    filename = sanitize_filename(title)
+    filename = build_output_filename(title, url)
 
     path.append((title, url))
     breadcrumbs = build_breadcrumbs(path)
@@ -176,17 +183,21 @@ def process_url(url_obj, path, indent_level, client, failed_urls, delay, state):
     return filename, html_output
 
 
-def write_failed_urls(output_dir, failed_urls):
-    if not failed_urls:
+def write_failed_urls(failed_urls_path, failed_urls, always_write=False):
+    if not failed_urls and not always_write:
         return
 
-    print(f"\n{'=' * 60}")
-    print(f"WARNING: {len(failed_urls)} URLs failed:")
-    for url in failed_urls:
-        print(f"  - {url}")
+    parent_dir = os.path.dirname(failed_urls_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
 
-    failed_path = os.path.join(output_dir, "_failed_urls.txt")
-    with open(failed_path, "w", encoding="utf-8") as f:
+    if failed_urls:
+        print(f"\n{'=' * 60}")
+        print(f"WARNING: {len(failed_urls)} URLs failed:")
+        for url in failed_urls:
+            print(f"  - {url}")
+
+    with open(failed_urls_path, "w", encoding="utf-8") as f:
         f.write("\n".join(failed_urls))
 
 
@@ -207,6 +218,10 @@ def main():
     parser.add_argument(
         "--root-indices",
         help="Comma-separated top-level root indices to process from config.json",
+    )
+    parser.add_argument(
+        "--failed-urls-file",
+        help="Path for the failed URL report. Defaults to <output-dir>/_failed_urls.txt",
     )
     args = parser.parse_args()
 
@@ -232,6 +247,10 @@ def main():
     client = make_client()
     failed_urls = []
     state = {"processed": 0, "total": total_urls}
+    failed_urls_path = args.failed_urls_file or os.path.join(
+        args.output_dir, "_failed_urls.txt"
+    )
+    always_write_failed_urls = bool(args.failed_urls_file)
 
     try:
         for url_obj in selected_roots:
@@ -249,7 +268,11 @@ def main():
                 f.write(content)
     finally:
         client.close()
-        write_failed_urls(args.output_dir, failed_urls)
+        write_failed_urls(
+            failed_urls_path,
+            failed_urls,
+            always_write=always_write_failed_urls,
+        )
 
     print("HTML files generated successfully")
 

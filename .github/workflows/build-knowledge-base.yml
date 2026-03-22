@@ -8,10 +8,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   prepare-config:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     outputs:
       scrape_matrix: ${{ steps.partition.outputs.matrix }}
       shard_count: ${{ steps.partition.outputs.shard_count }}
@@ -29,7 +33,7 @@ jobs:
         pip install httpx beautifulsoup4
 
     - name: Build URL tree
-      run: python build_url_tree.py --validate
+      run: python build_url_tree.py
 
     - name: Partition scrape workload
       id: partition
@@ -45,9 +49,10 @@ jobs:
   scrape:
     needs: prepare-config
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.prepare-config.outputs.scrape_matrix) }}
 
     steps:
@@ -73,12 +78,16 @@ jobs:
         python main.py \
           --config config.json \
           --root-indices "${{ matrix.root_indices }}" \
-          --output-dir knowledge_base
+          --delay 2.0 \
+          --output-dir "knowledge_base/shard-${{ matrix.shard }}" \
+          --failed-urls-file "failed_urls_shard_${{ matrix.shard }}.txt"
 
     - name: Package shard artifact
       run: |
         mkdir -p artifacts
-        tar -czf "artifacts/knowledge-base-shard-${{ matrix.shard }}.tar.gz" -C knowledge_base .
+        tar -czf "artifacts/knowledge-base-shard-${{ matrix.shard }}.tar.gz" \
+          "knowledge_base/shard-${{ matrix.shard }}" \
+          "failed_urls_shard_${{ matrix.shard }}.txt"
 
     - name: Upload shard artifact
       uses: actions/upload-artifact@v4
@@ -86,6 +95,42 @@ jobs:
         name: knowledge-base-shard-${{ matrix.shard }}
         path: artifacts/knowledge-base-shard-${{ matrix.shard }}.tar.gz
         retention-days: 7
+
+  scrape-report:
+    if: always()
+    needs: [prepare-config, scrape]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Download available scrape artifacts
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        pattern: knowledge-base-shard-*
+        path: artifacts
+        merge-multiple: true
+
+    - name: Build scrape report
+      run: |
+        python summarize_scrape_artifacts.py \
+          --artifacts-dir artifacts \
+          --expected-shards "${{ needs.prepare-config.outputs.shard_count || '0' }}" \
+          --output scrape-report/scrape-report.md \
+          --failed-urls-output scrape-report/failed_urls.txt
+
+    - name: Upload scrape report artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: scrape-report
+        path: scrape-report/
+        retention-days: 30
 
   build-artifact:
     needs: scrape
@@ -118,17 +163,16 @@ jobs:
         merge-multiple: true
 
     - name: Assemble knowledge base
-      run: |
-        mkdir -p knowledge_base
-        for archive in artifacts/knowledge-base-shard-*.tar.gz; do
-          tar -xzf "$archive" -C knowledge_base
-        done
+      run: python assemble_scrape_artifacts.py --artifacts-dir artifacts --output-dir knowledge_base --failed-urls-output combined_failed_urls.txt
 
     - name: Chunk documents
       run: python chunk_docs.py --verbose
 
     - name: Build semantic index
       run: python build_index.py --verify
+
+    - name: Bundle failed URL report
+      run: cp combined_failed_urls.txt boomi_knowledge_db/_failed_urls.txt
 
     - name: Package artifact
       run: tar -czf boomi_knowledge_db.tar.gz boomi_knowledge_db/
