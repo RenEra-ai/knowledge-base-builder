@@ -19,6 +19,15 @@ def find_archives(artifacts_dir):
     return sorted(archives)
 
 
+# Use the safer Python 3.12+ tar extraction filter when available, but
+# keep working on older interpreters that do not support the filter argument.
+def extract_archive(archive, output_path):
+    try:
+        archive.extractall(path=output_path, filter="data")
+    except TypeError:
+        archive.extractall(path=output_path)
+
+
 def inspect_archive(archive_path):
     html_count = 0
     failed_urls = []
@@ -26,7 +35,7 @@ def inspect_archive(archive_path):
     with tempfile.TemporaryDirectory(prefix="scrape-report-") as tmpdir:
         tmp_path = Path(tmpdir)
         with tarfile.open(archive_path, "r:gz") as archive:
-            archive.extractall(tmp_path)
+            extract_archive(archive, tmp_path)
 
         for html_path in tmp_path.rglob("*.html"):
             if html_path.is_file():

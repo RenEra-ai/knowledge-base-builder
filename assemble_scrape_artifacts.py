@@ -67,6 +67,15 @@ def write_failed_urls(output_path, failed_urls):
             f.write("\n".join(unique_urls))
 
 
+# Use the safer Python 3.12+ tar extraction filter when available, but
+# keep working on older interpreters that do not support the filter argument.
+def extract_archive(archive, output_path):
+    try:
+        archive.extractall(path=output_path, filter="data")
+    except TypeError:
+        archive.extractall(path=output_path)
+
+
 def assemble_archives(artifacts_dir, output_dir, failed_urls_output):
     archives = find_archives(artifacts_dir)
     if not archives:
@@ -81,7 +90,7 @@ def assemble_archives(artifacts_dir, output_dir, failed_urls_output):
         with tempfile.TemporaryDirectory(prefix=f"scrape-shard-{shard_id}-") as tmpdir:
             tmp_path = Path(tmpdir)
             with tarfile.open(archive_path, "r:gz") as archive:
-                archive.extractall(tmp_path)
+                extract_archive(archive, tmp_path)
 
             shard_dirs = list((tmp_path / "knowledge_base").glob("shard-*"))
             if len(shard_dirs) != 1:
