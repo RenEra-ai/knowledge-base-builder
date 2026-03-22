@@ -56,6 +56,12 @@ python main.py
 
 Output HTML files are written to the `knowledge_base/` directory. Failed URLs (404s, timeouts) are logged to `knowledge_base/_failed_urls.txt`.
 
+Options:
+- `--config FILE` — input config file to scrape (default: `config.json`)
+- `--output-dir DIR` — output directory for generated HTML files (default: `knowledge_base/`)
+- `--delay SECS` — delay between requests (default: `1.0`)
+- `--root-indices LIST` — scrape only the selected top-level root indices (used by GitHub Actions sharding)
+
 ### 3. Chunk the documentation
 
 `chunk_docs.py` splits HTML files into semantically meaningful chunks on heading boundaries, outputting structured JSONL with metadata:

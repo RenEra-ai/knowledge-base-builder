@@ -24,6 +24,7 @@ jobs:
       run: |
         python -m py_compile main.py
         python -m py_compile build_url_tree.py
+        python -m py_compile build_scrape_matrix.py
         python -m py_compile chunk_docs.py
         python -m py_compile build_index.py
 

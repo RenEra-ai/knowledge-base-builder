@@ -3,15 +3,94 @@ name: Build Knowledge Base
 on:
   schedule:
     - cron: '0 6 * * 0'  # Weekly on Sunday at 6am UTC
-  workflow_dispatch:       # Manual trigger button in GitHub UI
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  prepare-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      scrape_matrix: ${{ steps.partition.outputs.matrix }}
+      shard_count: ${{ steps.partition.outputs.shard_count }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install base dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install httpx beautifulsoup4
+
+    - name: Build URL tree
+      run: python build_url_tree.py --validate
+
+    - name: Partition scrape workload
+      id: partition
+      run: python build_scrape_matrix.py --shards 4 --github-output "$GITHUB_OUTPUT"
+
+    - name: Upload config artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-config
+        path: config.json
+        retention-days: 7
+
+  scrape:
+    needs: prepare-config
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare-config.outputs.scrape_matrix) }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Download generated config
+      uses: actions/download-artifact@v4
+      with:
+        name: generated-config
+        path: .
+
+    - name: Install base dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install httpx beautifulsoup4
+
+    - name: Scrape documentation shard
+      run: |
+        python main.py \
+          --config config.json \
+          --root-indices "${{ matrix.root_indices }}" \
+          --output-dir knowledge_base
+
+    - name: Package shard artifact
+      run: |
+        mkdir -p artifacts
+        tar -czf "artifacts/knowledge-base-shard-${{ matrix.shard }}.tar.gz" -C knowledge_base .
+
+    - name: Upload shard artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: knowledge-base-shard-${{ matrix.shard }}
+        path: artifacts/knowledge-base-shard-${{ matrix.shard }}.tar.gz
+        retention-days: 7
+
+  build-artifact:
+    needs: scrape
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
     - uses: actions/checkout@v4
@@ -31,11 +110,19 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Build URL tree
-      run: python build_url_tree.py --validate
+    - name: Download scrape artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: knowledge-base-shard-*
+        path: artifacts
+        merge-multiple: true
 
-    - name: Scrape documentation
-      run: python main.py
+    - name: Assemble knowledge base
+      run: |
+        mkdir -p knowledge_base
+        for archive in artifacts/knowledge-base-shard-*.tar.gz; do
+          tar -xzf "$archive" -C knowledge_base
+        done
 
     - name: Chunk documents
       run: python chunk_docs.py --verbose
