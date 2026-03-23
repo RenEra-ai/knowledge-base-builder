@@ -106,6 +106,20 @@ def print_stats(chunk_count, model_name, output_dir, elapsed, embedding_dim=None
     print(f"{'=' * 60}")
 
 
+def get_embedding_dim(embedding_function):
+    """Best-effort embedding dimension probe that does not depend on Chroma APIs."""
+    try:
+        sample_embeddings = embedding_function(["dimension probe"])
+    except Exception as exc:
+        print(f"WARNING: Could not determine embedding dimension: {exc}")
+        return None
+
+    if not sample_embeddings:
+        return None
+
+    return len(sample_embeddings[0])
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Build ChromaDB index from chunked docs"
@@ -145,6 +159,7 @@ def main():
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=args.model
     )
+    embedding_dim = get_embedding_dim(ef)
 
     print(f"Creating ChromaDB at {args.output}...")
     client = chromadb.PersistentClient(path=args.output)
@@ -167,9 +182,6 @@ def main():
     build_index(chunks, collection, args.batch_size, args.verbose)
     elapsed = time.time() - start
 
-    # Get embedding dimension from a sample
-    sample = collection.peek(limit=1, include=["embeddings"])
-    embedding_dim = len(sample["embeddings"][0]) if sample["embeddings"] else None
     print_stats(len(chunks), args.model, args.output, elapsed, embedding_dim)
 
     if args.verify:
