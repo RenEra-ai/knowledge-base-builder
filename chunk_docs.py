@@ -52,6 +52,24 @@ def make_chunk_id(filename, index):
     return f"{base}_{index:03d}"
 
 
+def derive_page_key(source_url, filename):
+    """Return a stable, non-empty page identity for a chunk.
+
+    Uses the normalized source URL when available, otherwise falls back to a
+    deterministic key derived from the source HTML filename. The result is
+    always non-empty so downstream lookup and diversification never depend on
+    source_url being present.
+    """
+    if source_url:
+        normalized = source_url.strip()
+        normalized = normalized.split("#", 1)[0]
+        normalized = normalized.split("?", 1)[0]
+        normalized = normalized.rstrip("/")
+        if normalized:
+            return normalized
+    return "file:" + os.path.splitext(filename)[0]
+
+
 def parse_breadcrumb(element):
     """Extract breadcrumb text and source URL from a Path paragraph element.
 
@@ -290,6 +308,7 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
             "section_heading": raw["heading_text"] or page_title,
             "breadcrumb": breadcrumb,
             "source_url": raw["source_url"],
+            "page_key": derive_page_key(raw["source_url"], filename),
             "category": category,
             "content": content_text,
             "content_html": raw["content_html"],
@@ -339,6 +358,22 @@ def merge_small_chunks(raw_chunks, min_tokens):
     return merged
 
 
+def assign_chunk_indices(all_chunks):
+    """Assign a 0-based, page-local chunk_index to every chunk, in document order.
+
+    all_chunks is already in document order: files are processed in sorted order
+    and chunk_file emits chunks in document order. A single HTML file can
+    contribute chunks to multiple page_keys (the breadcrumb/source_url can change
+    mid-file), so the counter is keyed on page_key, not on the file.
+    """
+    page_counters = {}
+    for chunk in all_chunks:
+        page_key = chunk["page_key"]
+        index = page_counters.get(page_key, 0)
+        chunk["chunk_index"] = index
+        page_counters[page_key] = index + 1
+
+
 def main():
     parser = argparse.ArgumentParser(description="Chunk Boomi HTML docs for indexing")
     parser.add_argument("--input", default=DEFAULT_INPUT, help="Input directory of HTML files")
@@ -378,6 +413,10 @@ def main():
         except Exception as e:
             print(f"  FAILED: {filename} — {e}")
             continue
+
+    assign_chunk_indices(all_chunks)
+    for chunk in all_chunks:
+        assert chunk["page_key"], f"chunk {chunk['id']} has an empty page_key"
 
     with open(args.output, "w", encoding="utf-8") as f:
         for chunk in all_chunks:

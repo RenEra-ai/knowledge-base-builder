@@ -169,7 +169,10 @@ jobs:
       run: python chunk_docs.py --verbose
 
     - name: Build semantic index
-      run: python build_index.py --verify
+      run: |
+        python build_index.py --verify \
+          --artifact-tag "kb-${{ github.run_number }}" \
+          --builder-commit "${{ github.sha }}"
 
     - name: Bundle failed URL report
       run: cp combined_failed_urls.txt boomi_knowledge_db/_failed_urls.txt
@@ -184,6 +187,42 @@ jobs:
         path: boomi_knowledge_db.tar.gz
         retention-days: 90
 
+    - name: Build release notes
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        python - <<'EOF'
+        import json, os
+
+        with open("boomi_knowledge_db/manifest.json", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        failed = 0
+        if os.path.exists("combined_failed_urls.txt"):
+            with open("combined_failed_urls.txt", encoding="utf-8") as f:
+                failed = sum(1 for line in f if line.strip())
+
+        top = sorted(manifest["category_counts"].items(), key=lambda kv: -kv[1])[:5]
+
+        lines = [
+            f"## Boomi Documentation Corpus `{manifest['artifact_tag'] or manifest['builder_commit']}`",
+            "",
+            f"- **Build timestamp:** {manifest['build_timestamp']}",
+            f"- **Chunks:** {manifest['chunk_count']:,}",
+            f"- **Pages:** {manifest['page_count']:,}",
+            f"- **Embedding model:** {manifest['embedding_model']} ({manifest['embedding_dim']} dim)",
+            f"- **Failed source URLs:** {failed:,}",
+            "",
+            "### Top categories by chunk count",
+            "",
+        ]
+        lines += [f"- {name}: {count:,}" for name, count in top]
+        lines.append("")
+
+        with open("release_notes.md", "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print("\n".join(lines))
+        EOF
+
     - name: Create GitHub release
       if: github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
@@ -191,4 +230,5 @@ jobs:
         tag_name: kb-${{ github.run_number }}
         name: Knowledge Base Build ${{ github.run_number }}
         files: boomi_knowledge_db.tar.gz
+        body_path: release_notes.md
         generate_release_notes: true

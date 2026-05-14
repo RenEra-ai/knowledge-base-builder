@@ -9,15 +9,30 @@ Usage:
 import argparse
 import json
 import os
+import sys
 import time
+from collections import Counter
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
-import chromadb
-from chromadb.utils import embedding_functions
+# chromadb / sentence-transformers are imported lazily inside main() — see note
+# there — so the pure helpers in this module stay importable without the heavy
+# ML stack installed.
 
 DEFAULT_INPUT = "chunks.jsonl"
 DEFAULT_OUTPUT = "boomi_knowledge_db/"
 DEFAULT_MODEL = "all-MiniLM-L6-v2"
 BATCH_SIZE = 200
+COLLECTION_NAME = "boomi_docs"
+MANIFEST_SCHEMA_VERSION = "1"
+BUILDER_VERSION = "0.1.0"
+VERIFY_MAX_DISTANCE = 0.45
+
+# Fields every chunk must carry once chunk_docs.py has run.
+REQUIRED_CHUNK_FIELDS = {
+    "id", "content", "title", "section_heading", "breadcrumb",
+    "source_url", "page_key", "chunk_index", "category", "token_estimate",
+}
 
 VERIFY_QUERIES = [
     "How do environment extensions work?",
@@ -52,6 +67,8 @@ def build_index(chunks, collection, batch_size, verbose):
                 "section_heading": c["section_heading"],
                 "breadcrumb": c["breadcrumb"],
                 "source_url": c["source_url"],
+                "page_key": c["page_key"],
+                "chunk_index": c["chunk_index"],
                 "category": c["category"],
                 "token_estimate": c["token_estimate"],
             } for c in batch],
@@ -63,17 +80,39 @@ def build_index(chunks, collection, batch_size, verbose):
             print(f"    Last batch: {batch[-1]['id']}")
 
 
-def verify_index(collection):
-    """Run test queries to verify the index returns relevant results."""
+def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE):
+    """Run smoke queries and return True only if the index is release-quality.
+
+    The release gate: every VERIFY_QUERIES entry must return at least one hit
+    with cosine distance at or below max_distance. Returns False (and prints the
+    offending queries) otherwise so callers can fail the build.
+    """
     print("\nVerification — test queries:")
+    failures = []
     for query in VERIFY_QUERIES:
         results = collection.query(query_texts=[query], n_results=3)
+        ids = results["ids"][0]
+        distances = results["distances"][0]
         print(f"\n  Q: {query}")
-        for i, (_doc_id, distance) in enumerate(
-            zip(results["ids"][0], results["distances"][0])
-        ):
+        if not ids:
+            print("    (no results)")
+            failures.append((query, None))
+            continue
+        for i, (_doc_id, distance) in enumerate(zip(ids, distances)):
             meta = results["metadatas"][0][i]
             print(f"    {i+1}. [{distance:.3f}] {meta['title']} > {meta['section_heading']}")
+        if min(distances) > max_distance:
+            failures.append((query, min(distances)))
+
+    if failures:
+        print(f"\nFAILED: {len(failures)} verify query(ies) above distance {max_distance}:")
+        for query, best in failures:
+            shown = "no results" if best is None else f"best distance {best:.3f}"
+            print(f"  - {query!r}: {shown}")
+        return False
+
+    print(f"\nAll {len(VERIFY_QUERIES)} verify queries passed (distance <= {max_distance}).")
+    return True
 
 
 def get_dir_size(path):
@@ -120,6 +159,41 @@ def get_embedding_dim(embedding_function):
     return len(sample_embeddings[0])
 
 
+def build_manifest(chunks, args, embedding_dim):
+    """Assemble the manifest.json contract (schema v1) from the indexed chunks.
+
+    Pure function (no I/O) so it is cheap to unit-test. main() writes the
+    returned dict into the Chroma output directory.
+    """
+    category_counts = dict(Counter(c["category"] for c in chunks))
+    page_keys = {c["page_key"] for c in chunks}
+
+    source_roots = sorted({
+        f"{parsed.scheme}://{parsed.netloc}"
+        for parsed in (
+            urlparse(c["source_url"]) for c in chunks if c.get("source_url")
+        )
+        if parsed.scheme and parsed.netloc
+    })
+    if not source_roots:
+        source_roots = ["https://help.boomi.com"]
+
+    return {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "collection_name": COLLECTION_NAME,
+        "embedding_model": args.model,
+        "embedding_dim": embedding_dim,
+        "build_timestamp": datetime.now(timezone.utc).isoformat(),
+        "chunk_count": len(chunks),
+        "page_count": len(page_keys),
+        "category_counts": category_counts,
+        "source_roots": source_roots,
+        "artifact_tag": args.artifact_tag,
+        "builder_commit": args.builder_commit,
+        "builder_version": BUILDER_VERSION,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Build ChromaDB index from chunked docs"
@@ -142,18 +216,46 @@ def main():
     parser.add_argument(
         "--verbose", action="store_true", help="Print progress details"
     )
+    parser.add_argument(
+        "--artifact-tag", default="",
+        help="GitHub release tag for this corpus (e.g. kb-42); recorded in manifest.json",
+    )
+    parser.add_argument(
+        "--builder-commit", default="",
+        help="Builder git commit sha; recorded in manifest.json",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.input):
         print(f"FAILED: Input file not found: {args.input}")
-        return
+        sys.exit(1)
 
     print(f"Loading chunks from {args.input}...")
     chunks = load_chunks(args.input)
     if not chunks:
         print("FAILED: No chunks found in input file")
-        return
+        sys.exit(1)
     print(f"  Loaded {len(chunks):,} chunks")
+
+    missing_fields = REQUIRED_CHUNK_FIELDS - set(chunks[0])
+    if missing_fields:
+        print(f"FAILED: chunks in {args.input} are missing required field(s): "
+              f"{sorted(missing_fields)}. Re-run chunk_docs.py.")
+        sys.exit(1)
+
+    duplicate_ids = sorted(
+        chunk_id for chunk_id, count in Counter(c["id"] for c in chunks).items()
+        if count > 1
+    )
+    if duplicate_ids:
+        print(f"FAILED: {len(duplicate_ids)} duplicate chunk id(s) in {args.input}, "
+              f"e.g. {duplicate_ids[:5]}")
+        sys.exit(1)
+
+    # Heavy ML deps are imported only after the cheap input-validation gates
+    # above have passed, so a bad JSONL fails fast without loading chromadb.
+    import chromadb
+    from chromadb.utils import embedding_functions
 
     print(f"\nInitializing embedding model: {args.model}")
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -166,13 +268,13 @@ def main():
 
     # Always rebuild from scratch
     try:
-        client.delete_collection("boomi_docs")
+        client.delete_collection(COLLECTION_NAME)
         print("  Deleted existing collection")
     except Exception:
         pass
 
     collection = client.create_collection(
-        name="boomi_docs",
+        name=COLLECTION_NAME,
         embedding_function=ef,
         metadata={"hnsw:space": "cosine"},
     )
@@ -184,8 +286,15 @@ def main():
 
     print_stats(len(chunks), args.model, args.output, elapsed, embedding_dim)
 
+    manifest = build_manifest(chunks, args, embedding_dim)
+    manifest_path = os.path.join(args.output, "manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"Wrote manifest: {manifest_path}")
+
     if args.verify:
-        verify_index(collection)
+        if not verify_index(collection):
+            sys.exit(1)
 
 
 if __name__ == "__main__":
