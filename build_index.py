@@ -43,6 +43,43 @@ VERIFY_QUERIES = [
 ]
 
 
+def validate_chunks(chunks):
+    """Validate every chunk against the producer contract.
+
+    Checks the plan's required invariants for *all* chunks, not just the first:
+    required fields present; non-empty string id/page_key/content; integer
+    chunk_index; and contiguous 0-based chunk_index within each page_key.
+    Returns a list of human-readable error strings (empty == release-quality).
+    """
+    errors = []
+    for i, chunk in enumerate(chunks):
+        missing = REQUIRED_CHUNK_FIELDS - set(chunk)
+        if missing:
+            errors.append(f"chunk {i} missing required field(s): {sorted(missing)}")
+            continue
+        for field in ("id", "page_key", "content"):
+            value = chunk[field]
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"chunk {i} ({chunk.get('id')!r}) has empty/non-string {field!r}")
+        idx = chunk["chunk_index"]
+        if not isinstance(idx, int) or isinstance(idx, bool):
+            errors.append(f"chunk {i} ({chunk.get('id')!r}) has non-integer chunk_index: {idx!r}")
+
+    by_page = {}
+    for chunk in chunks:
+        page_key = chunk.get("page_key")
+        idx = chunk.get("chunk_index")
+        if isinstance(page_key, str) and page_key and isinstance(idx, int) and not isinstance(idx, bool):
+            by_page.setdefault(page_key, []).append(idx)
+    for page_key, indices in sorted(by_page.items()):
+        if sorted(indices) != list(range(len(indices))):
+            errors.append(
+                f"page_key {page_key!r} has non-contiguous chunk_index: {sorted(indices)}"
+            )
+
+    return errors
+
+
 def load_chunks(jsonl_path):
     """Load all chunks from a JSONL file."""
     chunks = []
@@ -214,6 +251,10 @@ def main():
         "--verify", action="store_true", help="Run test queries after building"
     )
     parser.add_argument(
+        "--verify-threshold", type=float, default=VERIFY_MAX_DISTANCE,
+        help="Maximum accepted best-hit distance for --verify smoke queries",
+    )
+    parser.add_argument(
         "--verbose", action="store_true", help="Print progress details"
     )
     parser.add_argument(
@@ -237,12 +278,8 @@ def main():
         sys.exit(1)
     print(f"  Loaded {len(chunks):,} chunks")
 
-    missing_fields = REQUIRED_CHUNK_FIELDS - set(chunks[0])
-    if missing_fields:
-        print(f"FAILED: chunks in {args.input} are missing required field(s): "
-              f"{sorted(missing_fields)}. Re-run chunk_docs.py.")
-        sys.exit(1)
-
+    # Duplicate ids are the most fundamental corpus error — check them before
+    # the per-chunk field/contiguity validation so the clearest message wins.
     duplicate_ids = sorted(
         chunk_id for chunk_id, count in Counter(c["id"] for c in chunks).items()
         if count > 1
@@ -250,6 +287,16 @@ def main():
     if duplicate_ids:
         print(f"FAILED: {len(duplicate_ids)} duplicate chunk id(s) in {args.input}, "
               f"e.g. {duplicate_ids[:5]}")
+        sys.exit(1)
+
+    chunk_errors = validate_chunks(chunks)
+    if chunk_errors:
+        print(f"FAILED: {len(chunk_errors)} chunk validation error(s) in {args.input}:")
+        for err in chunk_errors[:10]:
+            print(f"  - {err}")
+        if len(chunk_errors) > 10:
+            print(f"  ... and {len(chunk_errors) - 10} more")
+        print("Re-run chunk_docs.py.")
         sys.exit(1)
 
     # Heavy ML deps are imported only after the cheap input-validation gates
@@ -293,7 +340,7 @@ def main():
     print(f"Wrote manifest: {manifest_path}")
 
     if args.verify:
-        if not verify_index(collection):
+        if not verify_index(collection, args.verify_threshold):
             sys.exit(1)
 
 

@@ -2,7 +2,8 @@
 """
 Split scraped Boomi HTML docs into semantically meaningful chunks.
 
-Reads HTML files from knowledge_base/, splits on heading boundaries (h2/h3),
+Reads HTML files from knowledge_base/, splits on heading boundaries (any
+heading level — recursive scrapes nest child pages under deeper headings),
 extracts metadata, and outputs chunks.jsonl in JSON Lines format.
 
 Usage:
@@ -265,6 +266,7 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
             "heading_text": heading,
             "breadcrumb": sec["breadcrumb"],
             "source_url": sec["source_url"],
+            "page_key": derive_page_key(sec["source_url"], filename),
             "content_text": full_text,
             "content_html": content_html,
         })
@@ -288,6 +290,7 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
                     "heading_text": chunk["heading_text"],
                     "breadcrumb": chunk["breadcrumb"],
                     "source_url": chunk["source_url"],
+                    "page_key": chunk["page_key"],
                     "content_text": sub_full_text,
                     "content_html": sub_html,
                 })
@@ -302,13 +305,22 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
         breadcrumb = raw["breadcrumb"]
         category = detect_category(breadcrumb) if breadcrumb else "Unknown"
 
+        # Title is page-local: a recursive HTML file holds many child pages, so
+        # the file-level <h1> is only correct for the root page. The breadcrumb's
+        # last segment names the page the chunk actually belongs to; fall back to
+        # the file-level title when a section carries no breadcrumb.
+        if breadcrumb:
+            title = breadcrumb.split(" > ")[-1].strip() or page_title
+        else:
+            title = page_title
+
         chunk = {
             "id": make_chunk_id(filename, i),
-            "title": page_title,
-            "section_heading": raw["heading_text"] or page_title,
+            "title": title,
+            "section_heading": raw["heading_text"] or title,
             "breadcrumb": breadcrumb,
             "source_url": raw["source_url"],
-            "page_key": derive_page_key(raw["source_url"], filename),
+            "page_key": raw["page_key"],
             "category": category,
             "content": content_text,
             "content_html": raw["content_html"],
@@ -329,9 +341,9 @@ def merge_small_chunks(raw_chunks, min_tokens):
     for chunk in raw_chunks[1:]:
         prev = merged[-1]
         prev_tokens = estimate_tokens(prev["content_text"])
-        same_page = (prev["source_url"] == chunk["source_url"]
-                     or not prev["source_url"]
-                     or not chunk["source_url"])
+        # Merge boundaries are page identity, not citation metadata: page_key is
+        # always non-empty, so two sections only merge when they are the same page.
+        same_page = prev["page_key"] == chunk["page_key"]
 
         if prev_tokens < min_tokens and same_page:
             prev["content_text"] = (prev["content_text"] + "\n" + chunk["content_text"]).strip()
@@ -347,9 +359,7 @@ def merge_small_chunks(raw_chunks, min_tokens):
     if len(merged) > 1 and estimate_tokens(merged[-1]["content_text"]) < min_tokens:
         last = merged[-1]
         prev = merged[-2]
-        same_page = (prev["source_url"] == last["source_url"]
-                     or not prev["source_url"]
-                     or not last["source_url"])
+        same_page = prev["page_key"] == last["page_key"]
         if same_page:
             merged.pop()
             prev["content_text"] = (prev["content_text"] + "\n" + last["content_text"]).strip()
