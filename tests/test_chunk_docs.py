@@ -170,6 +170,35 @@ HEADING_ONLY_HTML = """
 """
 
 
+HEADING_ONLY_MERGE_HTML = """
+<h1>Function Module Service Batching</h1>
+<p><strong>Path:</strong> <a href="https://help.boomi.com/docs/fmsb">Function Module Service Batching</a></p>
+<h2>Process overview</h2>
+<h3>Step one</h3>
+<p>The Function Module Service Batching process begins by collecting messages from the inbound queue, which are then assembled into a batch payload for downstream delivery to the SAP system.</p>
+<h3>Step two</h3>
+<p>After assembly, the batched payload is dispatched through the configured connector with full retry semantics so that transient failures do not lose any in-flight records.</p>
+"""
+
+
+def test_heading_only_section_preserved_through_merge_at_production_min_tokens(tmp_path):
+    # Regression for code review feedback: an h2 heading-only "section" inside
+    # a real page (e.g. "Process overview" preceding h3 sub-sections) must
+    # contribute its heading text into the merged content, not vanish.
+    f = tmp_path / "fmsb.html"
+    f.write_text(HEADING_ONLY_MERGE_HTML, encoding="utf-8")
+
+    chunks = chunk_file(str(f), f.name, min_tokens=100, max_tokens=1200, verbose=False)
+
+    assert chunks, "expected at least one chunk"
+    combined = "\n".join(c["content"] for c in chunks)
+    assert "Process overview" in combined, (
+        f"heading-only h2 lost during merge; got chunks: {chunks!r}"
+    )
+    for c in chunks:
+        assert c["content"].strip(), f"blank chunk emitted: {c!r}"
+
+
 def test_chunk_file_returns_only_non_blank_chunks(tmp_path):
     for name, html in (
         ("multi.html", MULTI_URL_HTML),

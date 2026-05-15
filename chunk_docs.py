@@ -256,8 +256,8 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
         content_text = elements_to_text(sec["elements"])
 
         heading = sec["heading_text"]
-        if heading and sec["heading_tag"] != "h1" and content_text:
-            full_text = heading + "\n" + content_text
+        if heading and sec["heading_tag"] != "h1":
+            full_text = heading + "\n" + content_text if content_text else heading
         else:
             full_text = content_text
 
@@ -282,8 +282,8 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
                 sub_soup = BeautifulSoup(sub_html, "html.parser")
                 sub_text = sub_soup.get_text(separator=" ", strip=True)
                 heading = chunk["heading_text"]
-                if heading and sub_text:
-                    sub_full_text = heading + "\n" + sub_text
+                if heading:
+                    sub_full_text = heading + "\n" + sub_text if sub_text else heading
                 else:
                     sub_full_text = sub_text
                 final_raw.append({
