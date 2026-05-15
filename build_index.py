@@ -53,6 +53,9 @@ def validate_chunks(chunks):
     """
     errors = []
     for i, chunk in enumerate(chunks):
+        if not isinstance(chunk, dict):
+            errors.append(f"chunk {i} is not a JSON object: {type(chunk).__name__}")
+            continue
         missing = REQUIRED_CHUNK_FIELDS - set(chunk)
         if missing:
             errors.append(f"chunk {i} missing required field(s): {sorted(missing)}")
@@ -67,6 +70,8 @@ def validate_chunks(chunks):
 
     by_page = {}
     for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
         page_key = chunk.get("page_key")
         idx = chunk.get("chunk_index")
         if isinstance(page_key, str) and page_key and isinstance(idx, int) and not isinstance(idx, bool):
@@ -278,10 +283,16 @@ def main():
         sys.exit(1)
     print(f"  Loaded {len(chunks):,} chunks")
 
-    # Duplicate ids are the most fundamental corpus error — check them before
-    # the per-chunk field/contiguity validation so the clearest message wins.
+    # Duplicate ids are the most fundamental corpus error — check them first so
+    # the clearest message wins. Only count well-formed string ids: missing-id
+    # and non-object rows are left for validate_chunks() to report cleanly
+    # rather than raising a traceback here.
+    string_ids = [
+        c["id"] for c in chunks
+        if isinstance(c, dict) and isinstance(c.get("id"), str)
+    ]
     duplicate_ids = sorted(
-        chunk_id for chunk_id, count in Counter(c["id"] for c in chunks).items()
+        chunk_id for chunk_id, count in Counter(string_ids).items()
         if count > 1
     )
     if duplicate_ids:

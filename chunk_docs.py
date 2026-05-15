@@ -346,9 +346,13 @@ def merge_small_chunks(raw_chunks, min_tokens):
         same_page = prev["page_key"] == chunk["page_key"]
 
         if prev_tokens < min_tokens and same_page:
+            prev_had_content = bool(prev["content_text"].strip())
             prev["content_text"] = (prev["content_text"] + "\n" + chunk["content_text"]).strip()
             prev["content_html"] = (prev["content_html"] + "\n" + chunk["content_html"]).strip()
-            if not prev["heading_text"] and chunk["heading_text"]:
+            # If the previous chunk was heading-only (e.g. the page-title <h1>
+            # with no body before the first <h2>), the merged chunk's real
+            # section is the incoming one, so its heading should win.
+            if chunk["heading_text"] and (not prev["heading_text"] or not prev_had_content):
                 prev["heading_text"] = chunk["heading_text"]
             if not prev["breadcrumb"] and chunk["breadcrumb"]:
                 prev["breadcrumb"] = chunk["breadcrumb"]
