@@ -115,3 +115,71 @@ def test_assign_chunk_indices_preserves_document_order():
 
 def test_assign_chunk_indices_empty_list():
     assign_chunk_indices([])  # must not raise
+
+
+# --- empty-content filtering -------------------------------------------------
+
+CATEGORY_LANDING_HTML = """
+<h1>Integration</h1>
+<p><strong>Path:</strong> <a href="https://help.boomi.com/docs/integration">Integration</a></p>
+<h2>Process Building</h2>
+<p><strong>Path:</strong> <a href="https://help.boomi.com/docs/integration/process-building">Process Building</a></p>
+<p>Process Building covers how to design integration processes from end to end with enough detail to be useful as a standalone reference.</p>
+<h2>Connectors</h2>
+<p><strong>Path:</strong> <a href="https://help.boomi.com/docs/integration/connectors">Connectors</a></p>
+<p>Connectors describe how Boomi communicates with external systems and what configuration each connector type expects from the integrator.</p>
+"""
+
+
+def test_chunk_file_drops_empty_category_landing_chunk(tmp_path):
+    f = tmp_path / "integration_landing.html"
+    f.write_text(CATEGORY_LANDING_HTML, encoding="utf-8")
+
+    chunks = chunk_file(str(f), f.name, min_tokens=0, max_tokens=100_000, verbose=False)
+
+    # No chunk may have empty/blank content — the build_index.py validator
+    # rejects those and that's what broke the deploy.
+    for c in chunks:
+        assert c["content"].strip(), f"empty content in chunk {c['id']}: {c!r}"
+
+    # Child pages survive with their own page_key and real content.
+    page_keys = {c["page_key"] for c in chunks}
+    assert "https://help.boomi.com/docs/integration/process-building" in page_keys
+    assert "https://help.boomi.com/docs/integration/connectors" in page_keys
+
+    # The empty landing page (its own page_key) must NOT have been merged into
+    # a different page — it should simply be dropped.
+    landing_chunks = [
+        c for c in chunks
+        if c["page_key"] == "https://help.boomi.com/docs/integration"
+    ]
+    assert landing_chunks == []
+
+    # Titles should reflect each child page, not the parent category.
+    titles_by_page = {c["page_key"]: c["title"] for c in chunks}
+    assert titles_by_page["https://help.boomi.com/docs/integration/process-building"] == "Process Building"
+    assert titles_by_page["https://help.boomi.com/docs/integration/connectors"] == "Connectors"
+
+
+HEADING_ONLY_HTML = """
+<h1>Page Title</h1>
+<p><strong>Path:</strong> <a href="https://help.boomi.com/docs/lonely">Page Title</a></p>
+<h2>Standalone Heading</h2>
+<h2>Real Section</h2>
+<p>This section has a meaningful body that should be retained in the chunked output for the test.</p>
+"""
+
+
+def test_chunk_file_returns_only_non_blank_chunks(tmp_path):
+    for name, html in (
+        ("multi.html", MULTI_URL_HTML),
+        ("landing.html", CATEGORY_LANDING_HTML),
+        ("heading_only.html", HEADING_ONLY_HTML),
+    ):
+        f = tmp_path / name
+        f.write_text(html, encoding="utf-8")
+        chunks = chunk_file(str(f), f.name, min_tokens=0, max_tokens=100_000, verbose=False)
+        for c in chunks:
+            assert c["content"].strip(), (
+                f"{name}: blank content in chunk {c['id']}: {c!r}"
+            )

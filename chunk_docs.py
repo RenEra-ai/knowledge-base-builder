@@ -256,8 +256,8 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
         content_text = elements_to_text(sec["elements"])
 
         heading = sec["heading_text"]
-        if heading and sec["heading_tag"] != "h1":
-            full_text = heading + "\n" + content_text if content_text else heading
+        if heading and sec["heading_tag"] != "h1" and content_text:
+            full_text = heading + "\n" + content_text
         else:
             full_text = content_text
 
@@ -282,8 +282,8 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
                 sub_soup = BeautifulSoup(sub_html, "html.parser")
                 sub_text = sub_soup.get_text(separator=" ", strip=True)
                 heading = chunk["heading_text"]
-                if heading:
-                    sub_full_text = heading + "\n" + sub_text if sub_text else heading
+                if heading and sub_text:
+                    sub_full_text = heading + "\n" + sub_text
                 else:
                     sub_full_text = sub_text
                 final_raw.append({
@@ -313,6 +313,11 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
             title = breadcrumb.split(" > ")[-1].strip() or page_title
         else:
             title = page_title
+
+        if not content_text.strip():
+            # Heading-only / URL-only landing chunks have no semantic body to
+            # index. Drop them rather than emit content the validator rejects.
+            continue
 
         chunk = {
             "id": make_chunk_id(filename, i),
