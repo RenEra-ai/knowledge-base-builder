@@ -83,6 +83,13 @@ def test_validate_chunks_rejects_official_with_nonblank_extended_field():
     assert any("official chunk must leave 'source_path' blank" in e for e in errors)
 
 
+def test_validate_chunks_rejects_official_none_extended_field():
+    # A present None (not just a non-empty string) must be rejected — it would
+    # otherwise reach the Chroma metadata write as a non-scalar.
+    errors = validate_chunks([_valid_chunk(source_path=None)])
+    assert any("official chunk must leave 'source_path' blank" in e for e in errors)
+
+
 # --- build_manifest -----------------------------------------------------------
 
 def _args(model="all-MiniLM-L6-v2", artifact_tag="kb-42", builder_commit="abc1234"):

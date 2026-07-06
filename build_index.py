@@ -119,7 +119,10 @@ def validate_chunks(chunks):
                     )
         elif stype == OFFICIAL_SOURCE_TYPE:
             for field in PROVENANCE_REAL_VALUE_FIELDS:
-                if chunk.get(field, ""):
+                # Must be exactly the empty string (missing key -> "" is fine).
+                # A present None/0 is falsey but would reach the Chroma metadata
+                # write as a non-string, so reject it here instead of passing it.
+                if chunk.get(field, "") != "":
                     errors.append(
                         f"chunk {i} ({chunk.get('id')!r}) official chunk must leave {field!r} blank"
                     )
