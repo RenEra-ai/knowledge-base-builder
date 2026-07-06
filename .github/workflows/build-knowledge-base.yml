@@ -165,8 +165,14 @@ jobs:
     - name: Assemble knowledge base
       run: python assemble_scrape_artifacts.py --artifacts-dir artifacts --output-dir knowledge_base --failed-urls-output combined_failed_urls.txt
 
+    - name: Fetch companion sources
+      run: python fetch_companion.py --config companion_sources.json --staging companion_sources --manifest companion_manifest.json
+
     - name: Chunk documents
-      run: python chunk_docs.py --verbose
+      run: |
+        python chunk_docs.py --verbose \
+          --companion-input companion_sources \
+          --companion-manifest companion_manifest.json
 
     - name: Build semantic index
       run: |
@@ -203,6 +209,12 @@ jobs:
 
         top = sorted(manifest["category_counts"].items(), key=lambda kv: -kv[1])[:5]
 
+        stc = manifest.get("source_type_counts", {})
+        provenance = ", ".join(
+            f"{name} ({count:,})"
+            for name, count in sorted(stc.items(), key=lambda kv: -kv[1])
+        ) or "official"
+
         lines = [
             f"## Boomi Documentation Corpus `{manifest['artifact_tag'] or manifest['builder_commit']}`",
             "",
@@ -210,11 +222,17 @@ jobs:
             f"- **Chunks:** {manifest['chunk_count']:,}",
             f"- **Pages:** {manifest['page_count']:,}",
             f"- **Embedding model:** {manifest['embedding_model']} ({manifest['embedding_dim']} dim)",
+            f"- **Provenance:** {provenance}",
             f"- **Failed source URLs:** {failed:,}",
-            "",
-            "### Top categories by chunk count",
-            "",
         ]
+        companion = manifest.get("companion")
+        if companion:
+            lines.append(
+                f"- **Supplemental (companion):** {companion['repo']} @ "
+                f"{companion['commit'][:10]} — {companion['chunk_count']:,} chunks "
+                f"from {companion['file_count']} files (community BSD-2, unverified)"
+            )
+        lines += ["", "### Top categories by chunk count", ""]
         lines += [f"- {name}: {count:,}" for name, count in top]
         lines.append("")
 

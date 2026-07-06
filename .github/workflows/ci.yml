@@ -29,9 +29,20 @@ jobs:
         python -m py_compile assemble_scrape_artifacts.py
         python -m py_compile chunk_docs.py
         python -m py_compile build_index.py
+        python -m py_compile companion.py
+        python -m py_compile fetch_companion.py
 
     - name: Validate config.json
       run: python -c "import json; json.load(open('config.json'))"
+
+    - name: Validate companion_sources.json
+      run: |
+        python - <<'PY'
+        from fetch_companion import load_and_validate_config
+        config = load_and_validate_config("companion_sources.json")
+        print(f"companion sources OK: {len(config['files'])} files pinned to "
+              f"{config['commit'][:10]}")
+        PY
 
     - name: Validate scrape shard matrix coverage
       run: |

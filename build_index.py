@@ -28,11 +28,25 @@ MANIFEST_SCHEMA_VERSION = "1"
 BUILDER_VERSION = "0.1.0"
 VERIFY_MAX_DISTANCE = 0.45
 
-# Fields every chunk must carry once chunk_docs.py has run.
+# Fields every chunk must carry once chunk_docs.py has run. source_type and
+# verification_status are the load-bearing provenance labels (always populated,
+# "official" for docs and "companion_reference"/"companion_unverified" for the
+# supplemental corpus). The repo/path/url provenance fields are optional and
+# read with .get(..., "") because they are only populated for companion chunks.
 REQUIRED_CHUNK_FIELDS = {
     "id", "content", "title", "section_heading", "breadcrumb",
     "source_url", "page_key", "chunk_index", "category", "token_estimate",
+    "source_type", "verification_status",
 }
+
+# Optional per-chunk provenance metadata persisted to Chroma (empty for official
+# docs). Kept in sync with companion.PROVENANCE_FIELDS.
+PROVENANCE_METADATA_FIELDS = (
+    "source_type", "verification_status", "upstream_repo", "upstream_commit",
+    "source_path", "raw_url", "latest_url",
+)
+
+COMPANION_SOURCE_TYPE = "companion_reference"
 
 VERIFY_QUERIES = [
     "How do environment extensions work?",
@@ -40,6 +54,16 @@ VERIFY_QUERIES = [
     "Deploy a process to production",
     "Trading partner EDI setup",
     "Groovy scripting in data process shape",
+]
+
+# Companion smoke queries — each must retrieve a companion_reference-typed hit
+# within the distance threshold. Only run when the corpus actually contains
+# companion chunks, so a companion-less build never fails the gate.
+COMPANION_VERIFY_QUERIES = [
+    "REST connector operation dynamic properties runtime binding",
+    "Groovy data process step dataContext storeStream DDP",
+    "MCP Server connector SSE transport tool schema",
+    "map isMappable tagList instance identifier",
 ]
 
 
@@ -113,6 +137,15 @@ def build_index(chunks, collection, batch_size, verbose):
                 "chunk_index": c["chunk_index"],
                 "category": c["category"],
                 "token_estimate": c["token_estimate"],
+                # Provenance (empty strings for official docs). Chroma metadata
+                # must be scalars, so default missing values to "" not None.
+                "source_type": c.get("source_type", "official"),
+                "verification_status": c.get("verification_status", "official"),
+                "upstream_repo": c.get("upstream_repo", ""),
+                "upstream_commit": c.get("upstream_commit", ""),
+                "source_path": c.get("source_path", ""),
+                "raw_url": c.get("raw_url", ""),
+                "latest_url": c.get("latest_url", ""),
             } for c in batch],
         )
         indexed = min(i + batch_size, total)
@@ -122,38 +155,54 @@ def build_index(chunks, collection, batch_size, verbose):
             print(f"    Last batch: {batch[-1]['id']}")
 
 
-def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE):
+def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE, queries=None):
     """Run smoke queries and return True only if the index is release-quality.
 
-    The release gate: every VERIFY_QUERIES entry must return at least one hit
-    with cosine distance at or below max_distance. Returns False (and prints the
+    ``queries`` is a list of ``(query_text, expected_source_type)`` pairs;
+    ``expected_source_type`` of ``None`` accepts any hit (the official gate),
+    while ``"companion_reference"`` additionally requires a matching-typed hit —
+    proving companion content is retrievable. Defaults to the official
+    VERIFY_QUERIES. The gate: every query must return at least one hit within
+    ``max_distance`` (and of the expected type). Returns False (and prints the
     offending queries) otherwise so callers can fail the build.
     """
+    if queries is None:
+        queries = [(q, None) for q in VERIFY_QUERIES]
+
     print("\nVerification — test queries:")
     failures = []
-    for query in VERIFY_QUERIES:
+    for query, expected_type in queries:
         results = collection.query(query_texts=[query], n_results=3)
         ids = results["ids"][0]
         distances = results["distances"][0]
+        metas = results["metadatas"][0]
         print(f"\n  Q: {query}")
         if not ids:
             print("    (no results)")
-            failures.append((query, None))
+            failures.append((query, "no results"))
             continue
         for i, (_doc_id, distance) in enumerate(zip(ids, distances)):
-            meta = results["metadatas"][0][i]
-            print(f"    {i+1}. [{distance:.3f}] {meta['title']} > {meta['section_heading']}")
-        if min(distances) > max_distance:
-            failures.append((query, min(distances)))
+            meta = metas[i]
+            stype = meta.get("source_type", "official")
+            print(f"    {i+1}. [{distance:.3f}] ({stype}) {meta['title']} > {meta['section_heading']}")
+
+        close = [
+            (distances[i], metas[i].get("source_type", "official"))
+            for i in range(len(ids))
+            if distances[i] <= max_distance
+        ]
+        if not close:
+            failures.append((query, f"best distance {min(distances):.3f}"))
+        elif expected_type is not None and not any(st == expected_type for _, st in close):
+            failures.append((query, f"no {expected_type} hit within {max_distance}"))
 
     if failures:
-        print(f"\nFAILED: {len(failures)} verify query(ies) above distance {max_distance}:")
-        for query, best in failures:
-            shown = "no results" if best is None else f"best distance {best:.3f}"
-            print(f"  - {query!r}: {shown}")
+        print(f"\nFAILED: {len(failures)} verify query(ies) below quality bar:")
+        for query, reason in failures:
+            print(f"  - {query!r}: {reason}")
         return False
 
-    print(f"\nAll {len(VERIFY_QUERIES)} verify queries passed (distance <= {max_distance}).")
+    print(f"\nAll {len(queries)} verify queries passed (distance <= {max_distance}).")
     return True
 
 
@@ -220,7 +269,9 @@ def build_manifest(chunks, args, embedding_dim):
     if not source_roots:
         source_roots = ["https://help.boomi.com"]
 
-    return {
+    source_type_counts = dict(Counter(c.get("source_type", "official") for c in chunks))
+
+    manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "collection_name": COLLECTION_NAME,
         "embedding_model": args.model,
@@ -229,10 +280,49 @@ def build_manifest(chunks, args, embedding_dim):
         "chunk_count": len(chunks),
         "page_count": len(page_keys),
         "category_counts": category_counts,
+        "source_type_counts": source_type_counts,
         "source_roots": source_roots,
         "artifact_tag": args.artifact_tag,
         "builder_commit": args.builder_commit,
         "builder_version": BUILDER_VERSION,
+    }
+
+    companion = build_companion_summary(chunks)
+    if companion:
+        manifest["companion"] = companion
+
+    return manifest
+
+
+def build_companion_summary(chunks):
+    """Summarize the companion (supplemental) chunks, or None if there are none.
+
+    Kept as its own object so the corpus resource can render the supplemental
+    source (repo + commit) distinctly from the official docs. schema_version
+    stays "1" — this is an additive, optional field.
+    """
+    companion_chunks = [
+        c for c in chunks if c.get("source_type") == COMPANION_SOURCE_TYPE
+    ]
+    if not companion_chunks:
+        return None
+
+    repos = sorted({c.get("upstream_repo", "") for c in companion_chunks if c.get("upstream_repo")})
+    commits = sorted({c.get("upstream_commit", "") for c in companion_chunks if c.get("upstream_commit")})
+    file_paths = {c.get("source_path", "") for c in companion_chunks if c.get("source_path")}
+    # area = second breadcrumb segment ("Companion Reference > <area> > <title>").
+    area_counts = Counter(
+        parts[1].strip()
+        for parts in (c.get("breadcrumb", "").split(" > ") for c in companion_chunks)
+        if len(parts) >= 2 and parts[1].strip()
+    )
+
+    return {
+        "repo": ", ".join(repos),
+        "commit": ", ".join(commits),
+        "file_count": len(file_paths),
+        "chunk_count": len(companion_chunks),
+        "area_counts": dict(area_counts),
     }
 
 
@@ -351,7 +441,13 @@ def main():
     print(f"Wrote manifest: {manifest_path}")
 
     if args.verify:
-        if not verify_index(collection, args.verify_threshold):
+        queries = [(q, None) for q in VERIFY_QUERIES]
+        has_companion = any(
+            c.get("source_type") == COMPANION_SOURCE_TYPE for c in chunks
+        )
+        if has_companion:
+            queries += [(q, COMPANION_SOURCE_TYPE) for q in COMPANION_VERIFY_QUERIES]
+        if not verify_index(collection, args.verify_threshold, queries):
             sys.exit(1)
 
 

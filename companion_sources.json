@@ -1,0 +1,157 @@
+{
+  "repo": "OfficialBoomi/boomi-integration",
+  "repo_url": "https://github.com/OfficialBoomi/boomi-integration",
+  "commit": "19aacdd0aa4c9c83f5d87e9b89fb213044447f52",
+  "license": "BSD-2-Clause",
+  "source_type": "companion_reference",
+  "verification_status": "companion_unverified",
+  "raw_url_template": "https://raw.githubusercontent.com/OfficialBoomi/boomi-integration/{commit}/{path}",
+  "blob_url_template": "https://github.com/OfficialBoomi/boomi-integration/blob/{commit}/{path}",
+  "latest_blob_url_template": "https://github.com/OfficialBoomi/boomi-integration/blob/main/{path}",
+  "files": [
+    {
+      "path": "references/components/map_component.md",
+      "priority": 1,
+      "area": "Components",
+      "title": "Map Component",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/components/map_component_functions.md",
+      "priority": 1,
+      "area": "Components",
+      "title": "Map Component Functions",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/components/edi_profile_component.md",
+      "priority": 2,
+      "area": "Components",
+      "title": "EDI Profile Component",
+      "sections": ["instance identifier", "taglist", "qualifier"],
+      "drop_sections": null,
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/components/rest_connection_component.md",
+      "priority": 1,
+      "area": "Components",
+      "title": "REST Connection Component",
+      "sections": null,
+      "drop_sections": ["component structure"],
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/components/rest_connector_operation_component.md",
+      "priority": 1,
+      "area": "Components",
+      "title": "REST Connector Operation Component",
+      "sections": null,
+      "drop_sections": ["component structure", "complete examples", "redirect configuration", "operation naming conventions"],
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/components/mcp_server_connection_component.md",
+      "priority": 3,
+      "area": "Components",
+      "title": "MCP Server Connection Component",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/components/mcp_server_operation_component.md",
+      "priority": 3,
+      "area": "Components",
+      "title": "MCP Server Operation Component",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/steps/rest_connector_step.md",
+      "priority": 1,
+      "area": "Steps",
+      "title": "REST Connector Step",
+      "sections": null,
+      "drop_sections": ["configuration structure", "required components", "reference xml examples"],
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/steps/mcp_server_start_step.md",
+      "priority": 3,
+      "area": "Steps",
+      "title": "MCP Server Start Step",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": true
+    },
+    {
+      "path": "references/steps/data_process_groovy_step.md",
+      "priority": 4,
+      "area": "Steps",
+      "title": "Data Process Groovy Step",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/steps/data_process_step.md",
+      "priority": 4,
+      "area": "Steps",
+      "title": "Data Process Step",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/platform_entities/mcp_server.md",
+      "priority": 3,
+      "area": "Platform Entities",
+      "title": "MCP Server",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/BOOMI_THINKING.md",
+      "priority": 2,
+      "area": "Guides",
+      "title": "Boomi Thinking",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/guides/boomi_patterns.md",
+      "priority": 2,
+      "area": "Guides",
+      "title": "Boomi Patterns",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/guides/problem_solving_guide.md",
+      "priority": 2,
+      "area": "Guides",
+      "title": "Problem Solving Guide",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    },
+    {
+      "path": "references/guides/process_testing_guide.md",
+      "priority": 2,
+      "area": "Guides",
+      "title": "Process Testing Guide",
+      "sections": null,
+      "drop_sections": null,
+      "strip_xml_blocks": false
+    }
+  ]
+}

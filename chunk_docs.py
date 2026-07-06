@@ -17,8 +17,22 @@ import re
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
+from companion import (
+    COMPANION_CATEGORY,
+    COMPANION_SOURCE_TYPE,
+    COMPANION_VERIFICATION_STATUS,
+    OFFICIAL_SOURCE_TYPE,
+    OFFICIAL_VERIFICATION_STATUS,
+    PROVENANCE_FIELDS,
+    companion_chunk_id,
+    filter_sections,
+    split_markdown_sections,
+    strip_xml_blocks,
+)
+
 DEFAULT_INPUT = "knowledge_base/"
 DEFAULT_OUTPUT = "chunks.jsonl"
+DEFAULT_COMPANION_STAGING = "companion_sources/"
 DEFAULT_MIN_TOKENS = 100
 DEFAULT_MAX_TOKENS = 1200
 HEADING_TAGS = {f"h{i}" for i in range(1, 9)}
@@ -330,6 +344,15 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
             "content": content_text,
             "content_html": raw["content_html"],
             "token_estimate": token_est,
+            # Official docs carry the provenance defaults so both corpora satisfy
+            # one uniform chunk contract (companion chunks override these).
+            "source_type": OFFICIAL_SOURCE_TYPE,
+            "verification_status": OFFICIAL_VERIFICATION_STATUS,
+            "upstream_repo": "",
+            "upstream_commit": "",
+            "source_path": filename,
+            "raw_url": "",
+            "latest_url": "",
         }
         chunks.append(chunk)
 
@@ -393,6 +416,153 @@ def assign_chunk_indices(all_chunks):
         page_counters[page_key] = index + 1
 
 
+def _markdown_title(sections):
+    """First level-1 heading among parsed Markdown sections, else ''."""
+    for sec in sections:
+        if sec["level"] == 1 and sec["heading"]:
+            return sec["heading"]
+    return ""
+
+
+def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbose=False):
+    """Chunk one companion Markdown file into provenance-tagged chunk dicts.
+
+    Reuses the HTML path's merge/oversize-split machinery (merge_small_chunks,
+    split_html_on_paragraphs, estimate_tokens, the empty-content drop) while
+    carrying the companion provenance fields, a stable ``companion://`` page_key,
+    and the "Companion Reference" category. Section allow/deny filtering and
+    raw-XML stripping run before emit, so they only change *which* sections
+    exist — never the contiguous per-page chunk_index assigned later in main().
+    """
+    import markdown  # lazy: the HTML path must stay importable without markdown
+
+    with open(md_path, "r", encoding="utf-8") as f:
+        md = f.read()
+
+    repo = upstream.get("repo", "").strip("/")
+    page_key = "companion://{}/{}".format(repo, entry["path"])
+    provenance = {
+        "source_type": COMPANION_SOURCE_TYPE,
+        "verification_status": COMPANION_VERIFICATION_STATUS,
+        "upstream_repo": upstream.get("repo", ""),
+        "upstream_commit": upstream.get("commit", ""),
+        "source_path": entry["path"],
+        "raw_url": entry.get("raw_url", ""),
+        "latest_url": entry.get("latest_url", ""),
+    }
+    # source_url is the human-viewable pinned blob permalink for companion chunks.
+    source_url = entry.get("blob_url", "")
+
+    sections = split_markdown_sections(md)
+    title = (
+        entry.get("title")
+        or _markdown_title(sections)
+        or os.path.splitext(os.path.basename(entry["path"]))[0]
+    )
+    area = entry.get("area", "")
+    breadcrumb = " > ".join(p for p in (COMPANION_CATEGORY, area, title) if p)
+
+    sections = filter_sections(
+        sections,
+        allow_patterns=entry.get("sections"),
+        drop_sections=entry.get("drop_sections"),
+    )
+
+    raw_chunks = []
+    for sec in sections:
+        body = strip_xml_blocks(sec["body"]) if entry.get("strip_xml_blocks") else sec["body"]
+        heading = sec["heading"]
+        # Mirror the HTML path: prepend the heading for sub-sections (>= h2) so a
+        # section's title is embedded with its body; the h1/preamble is body-only.
+        if heading and sec["level"] >= 2:
+            content_text = heading + "\n" + body if body.strip() else heading
+        else:
+            content_text = body
+        content_html = markdown.markdown(content_text, extensions=["fenced_code", "tables"])
+
+        raw = {
+            "heading_text": heading,
+            "breadcrumb": breadcrumb,
+            "source_url": source_url,
+            "page_key": page_key,
+            "content_text": content_text,
+            "content_html": content_html,
+        }
+        raw.update(provenance)
+        raw_chunks.append(raw)
+
+    merged = merge_small_chunks(raw_chunks, min_tokens)
+
+    final_raw = []
+    for chunk in merged:
+        if estimate_tokens(chunk["content_text"]) > max_tokens:
+            sub_htmls = split_html_on_paragraphs(chunk["content_html"], max_tokens)
+            for sub_html in sub_htmls:
+                sub_soup = BeautifulSoup(sub_html, "html.parser")
+                sub_text = sub_soup.get_text(separator=" ", strip=True)
+                heading = chunk["heading_text"]
+                if heading:
+                    sub_full = heading + "\n" + sub_text if sub_text else heading
+                else:
+                    sub_full = sub_text
+                sub = dict(chunk)
+                sub["content_text"] = sub_full
+                sub["content_html"] = sub_html
+                final_raw.append(sub)
+        else:
+            final_raw.append(chunk)
+
+    chunks = []
+    for raw in final_raw:
+        content_text = raw["content_text"]
+        if not content_text.strip():
+            continue
+        idx = len(chunks)
+        chunk = {
+            "id": companion_chunk_id(entry["path"], idx),
+            "title": title,
+            "section_heading": raw["heading_text"] or title,
+            "breadcrumb": breadcrumb,
+            "source_url": source_url,
+            "page_key": page_key,
+            "category": COMPANION_CATEGORY,
+            "content": content_text,
+            "content_html": raw["content_html"],
+            "token_estimate": estimate_tokens(content_text),
+        }
+        for key in PROVENANCE_FIELDS:
+            chunk[key] = raw[key]
+        chunks.append(chunk)
+
+    return chunks
+
+
+def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbose=False):
+    """Load a companion manifest and chunk every staged Markdown file it lists.
+
+    Fails if the manifest or a staged file is missing (every companion source is
+    mandatory); warns if an allowlisted file yields no chunks.
+    """
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    upstream = {"repo": manifest["repo"], "commit": manifest["commit"]}
+    all_companion = []
+    for entry in manifest["files"]:
+        md_path = os.path.join(staging_dir, entry["path"])
+        if not os.path.isfile(md_path):
+            raise FileNotFoundError(f"Staged companion file missing: {md_path}")
+        file_chunks = chunk_markdown_file(
+            md_path, entry, upstream, min_tokens, max_tokens, verbose
+        )
+        if not file_chunks:
+            print(f"  WARNING: companion file produced no chunks: {entry['path']}")
+        all_companion.extend(file_chunks)
+        print(f"[companion] {entry['path']}: {len(file_chunks)} chunk(s)")
+
+    return all_companion
+
+
 def main():
     parser = argparse.ArgumentParser(description="Chunk Boomi HTML docs for indexing")
     parser.add_argument("--input", default=DEFAULT_INPUT, help="Input directory of HTML files")
@@ -400,21 +570,31 @@ def main():
     parser.add_argument("--min-tokens", type=int, default=DEFAULT_MIN_TOKENS, help="Minimum chunk size in tokens")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS, help="Maximum chunk size in tokens")
     parser.add_argument("--verbose", action="store_true", help="Print each chunk as it is created")
+    parser.add_argument(
+        "--companion-input", default=DEFAULT_COMPANION_STAGING,
+        help="Directory of staged companion Markdown (from fetch_companion.py)",
+    )
+    parser.add_argument(
+        "--companion-manifest", default=None,
+        help="companion_manifest.json describing the staged companion files; "
+             "enables the supplemental Companion corpus when provided",
+    )
     args = parser.parse_args()
 
-    if not os.path.isdir(args.input):
-        print(f"FAILED: Input directory not found: {args.input}")
-        return
-
-    html_files = sorted(f for f in os.listdir(args.input) if f.endswith(".html"))
-    if not html_files:
-        print(f"WARNING: No HTML files found in {args.input}")
-        return
-
     all_chunks = []
-    total_files = len(html_files)
     category_counts = {}
 
+    if os.path.isdir(args.input):
+        html_files = sorted(f for f in os.listdir(args.input) if f.endswith(".html"))
+    else:
+        html_files = []
+        print(f"WARNING: HTML input directory not found: {args.input}")
+
+    if not html_files and not args.companion_manifest:
+        print(f"WARNING: No HTML files found in {args.input} and no companion manifest")
+        return
+
+    total_files = len(html_files)
     for i, filename in enumerate(html_files):
         filepath = os.path.join(args.input, filename)
         print(f"[{i + 1}/{total_files}] Processing: {filename}")
@@ -432,6 +612,16 @@ def main():
         except Exception as e:
             print(f"  FAILED: {filename} — {e}")
             continue
+
+    if args.companion_manifest:
+        print(f"\nProcessing companion sources from {args.companion_manifest}...")
+        companion_chunks = process_companion(
+            args.companion_manifest, args.companion_input,
+            args.min_tokens, args.max_tokens, args.verbose,
+        )
+        for chunk in companion_chunks:
+            category_counts[chunk["category"]] = category_counts.get(chunk["category"], 0) + 1
+        all_chunks.extend(companion_chunks)
 
     assign_chunk_indices(all_chunks)
     for chunk in all_chunks:

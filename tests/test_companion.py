@@ -1,0 +1,173 @@
+"""Tests for companion.py: pinned-commit enforcement, path hygiene, Markdown
+splitting/filtering, and raw-XML stripping."""
+
+import companion
+
+
+# --- pinned-commit + URL helpers ---------------------------------------------
+
+def test_is_pinned_commit_accepts_full_hex_sha():
+    assert companion.is_pinned_commit("19aacdd0aa4c9c83f5d87e9b89fb213044447f52")
+
+
+def test_is_pinned_commit_rejects_moving_refs_and_short_shas():
+    for bad in ("main", "master", "HEAD", "v1.0.22", "19aacdd", "", None,
+                "19AACDD0AA4C9C83F5D87E9B89FB213044447F52"):  # uppercase rejected
+        assert not companion.is_pinned_commit(bad), bad
+
+
+def test_build_url_fills_commit_and_path():
+    url = companion.build_url(
+        "https://raw.githubusercontent.com/o/r/{commit}/{path}",
+        "deadbeef" * 5, "references/x.md",
+    )
+    assert url == "https://raw.githubusercontent.com/o/r/" + "deadbeef" * 5 + "/references/x.md"
+
+
+def test_build_url_requires_path_placeholder():
+    import pytest
+    with pytest.raises(ValueError):
+        companion.build_url("https://example.com/no-placeholder", "sha", "p.md")
+
+
+def test_is_denied_path_blocks_traversal_and_denylist():
+    assert companion.is_denied_path("../etc/passwd")
+    assert companion.is_denied_path("/absolute/path.md")
+    assert companion.is_denied_path("dir\\win.md")
+    assert companion.is_denied_path("scripts/install.sh")
+    assert companion.is_denied_path("references/README.md")
+    assert companion.is_denied_path("CLAUDE.md")
+    assert companion.is_denied_path("references/guides/boomi_error_reference.md")
+    assert companion.is_denied_path("")
+    assert companion.is_denied_path(None)
+
+
+def test_is_denied_path_rejects_non_canonical_forms():
+    # Non-canonical aliases of an allowed path must be rejected outright so the
+    # denylist and the fetch dedupe cannot be fooled by ./x or x//y.
+    assert companion.is_denied_path("./references/x.md")
+    assert companion.is_denied_path("references//x.md")
+    assert companion.is_denied_path("references/./components/x.md")
+
+
+def test_is_denied_path_allows_normal_reference_md():
+    assert not companion.is_denied_path("references/components/map_component.md")
+
+
+def test_companion_chunk_id_is_stable_and_unique_per_path():
+    a = companion.companion_chunk_id("references/components/map_component.md", 0)
+    b = companion.companion_chunk_id("references/components/map_component.md", 0)
+    c = companion.companion_chunk_id("references/steps/map.md", 0)  # same basename, diff path
+    assert a == b            # deterministic
+    assert a != c            # different path -> different id despite same basename
+    assert a.endswith("_000")
+
+
+# --- split_markdown_sections --------------------------------------------------
+
+def test_split_markdown_sections_splits_on_1_to_3_hashes_only():
+    md = "# Title\n\nintro line\n\n## Sec A\n\nbody a\n\n### Sub\n\nsub body\n\n#### Deep\n\ndeep stays"
+    secs = companion.split_markdown_sections(md)
+    headings = [(s["level"], s["heading"]) for s in secs]
+    assert headings == [(1, "Title"), (2, "Sec A"), (3, "Sub")]
+    # An h4 is not a split point — it remains in the h3 section body.
+    assert "#### Deep" in secs[-1]["body"]
+    assert "deep stays" in secs[-1]["body"]
+
+
+def test_split_markdown_sections_ignores_hashes_inside_code_fences():
+    md = "## Real\n\n```bash\n# not a heading\necho hi\n```\n\nafter"
+    secs = companion.split_markdown_sections(md)
+    assert [s["heading"] for s in secs] == ["Real"]
+    assert "# not a heading" in secs[0]["body"]
+
+
+def test_split_markdown_sections_tilde_fence_not_closed_by_backticks():
+    # A ~~~ fence must not be closed by a ``` line inside it — the # after the
+    # backticks is still fenced body, not a section split (CommonMark).
+    md = "## Sec\n\n~~~\n```\n# still body\n~~~\n\n## Next\n\ntail"
+    secs = companion.split_markdown_sections(md)
+    assert [s["heading"] for s in secs] == ["Sec", "Next"]
+    assert "# still body" in secs[0]["body"]
+
+
+def test_split_markdown_sections_captures_preamble():
+    md = "preamble words before any heading\n\n# Title\n\nbody"
+    secs = companion.split_markdown_sections(md)
+    assert secs[0]["level"] == 0 and secs[0]["heading"] == ""
+    assert "preamble words" in secs[0]["body"]
+    assert secs[1]["heading"] == "Title"
+
+
+# --- filter_sections ----------------------------------------------------------
+
+def _secs(*pairs):
+    return [{"level": lvl, "heading": h, "body": body} for lvl, h, body in pairs]
+
+
+def test_filter_sections_drops_contents_toc_by_default():
+    secs = _secs((1, "Title", "x"), (2, "Contents", "- a\n- b"), (2, "Real", "body"))
+    kept = [s["heading"] for s in companion.filter_sections(secs)]
+    assert kept == ["Title", "Real"]
+
+
+def test_filter_sections_allowlist_keeps_matching_and_descendants():
+    secs = _secs(
+        (1, "Doc", ""),
+        (2, "Component Structure", "xml"),
+        (2, "Instance Identifiers and Qualifiers", "concept"),
+        (3, "tagLists", "detail"),
+        (3, "Runtime Behavior", "runtime"),
+        (2, "Data Types", "types"),
+    )
+    kept = [s["heading"] for s in companion.filter_sections(
+        secs, allow_patterns=["instance identifier", "taglist", "qualifier"]
+    )]
+    # The matching H2 and all of its H3 descendants survive; unrelated H2s drop.
+    assert kept == ["Instance Identifiers and Qualifiers", "tagLists", "Runtime Behavior"]
+
+
+def test_filter_sections_denylist_drops_matching_and_descendants():
+    secs = _secs(
+        (1, "Doc", ""),
+        (2, "Overview", "useful"),
+        (2, "Component Structure", "xml scaffolding"),
+        (3, "Required Elements", "more xml"),
+        (2, "Authentication", "auth"),
+    )
+    kept = [s["heading"] for s in companion.filter_sections(
+        secs, drop_sections=["component structure"]
+    )]
+    assert kept == ["Doc", "Overview", "Authentication"]
+
+
+def test_filter_sections_never_drops_tech_preview_warning():
+    secs = _secs(
+        (2, "Contents", "- toc"),
+        (2, "Component Structure", "> Technology Preview (Jan 2026): not production ready"),
+    )
+    kept = [s["heading"] for s in companion.filter_sections(
+        secs, drop_sections=["component structure"]
+    )]
+    # A Tech Preview warning survives both the Contents rule and the denylist.
+    assert "Component Structure" in kept
+
+
+# --- strip_xml_blocks ---------------------------------------------------------
+
+def test_strip_xml_blocks_removes_large_xml_fence():
+    big = "<bns:Component>\n" + ("  <field/>\n" * 400) + "</bns:Component>"
+    md = f"Intro text\n\n```xml\n{big}\n```\n\nOutro text"
+    out = companion.strip_xml_blocks(md)
+    assert "bns:Component" not in out
+    assert "omitted" in out
+    assert "Intro text" in out and "Outro text" in out
+
+
+def test_strip_xml_blocks_keeps_small_xml_and_other_languages():
+    small_xml = "```xml\n<field id=\"path\" value=\"/users\"/>\n```"
+    groovy = "```groovy\n" + ("x = 1\n" * 400) + "```"
+    md = f"{small_xml}\n\n{groovy}"
+    out = companion.strip_xml_blocks(md)
+    assert "<field" in out          # small xml kept
+    assert "x = 1" in out           # large groovy kept (not xml)

@@ -65,6 +65,21 @@ Options:
 
 Generated HTML filenames are prefixed with a short SHA-1 hash of the source URL so shard assembly is deterministic and collisions across similarly titled pages are avoided.
 
+### 2b. Fetch the Companion supplemental corpus (optional)
+
+`fetch_companion.py` downloads a small, curated set of Markdown reference docs from a **pinned commit** of a public BSD-2 GitHub repo (the [Boomi Companion](https://github.com/OfficialBoomi/boomi-integration) skill) into a staging directory, alongside a `companion_manifest.json` recording provenance + SHA-256 for each file:
+
+```bash
+python fetch_companion.py
+```
+
+Only the paths listed in `companion_sources.json` are fetched (non-recursive), and the run **fails closed** if the commit is not a full 40-char sha, a URL template hardcodes a moving ref, a path is disallowed, or any configured source is missing/empty. This content is *supplemental implementation context*, not official Boomi documentation — every chunk it produces is labelled `source_type="companion_reference"` / `verification_status="companion_unverified"`.
+
+Options:
+- `--config FILE` — allowlist config (default: `companion_sources.json`)
+- `--staging DIR` — staging directory for fetched Markdown (default: `companion_sources/`)
+- `--manifest FILE` — output manifest path (default: `companion_manifest.json`)
+
 ### 3. Chunk the documentation
 
 `chunk_docs.py` splits HTML files into semantically meaningful chunks on heading boundaries, outputting structured JSONL with metadata:
@@ -78,6 +93,8 @@ Options:
 - `--output FILE` — output JSONL file (default: `chunks.jsonl`)
 - `--min-tokens N` — minimum chunk size in tokens (default: `100`)
 - `--max-tokens N` — maximum chunk size in tokens (default: `1200`)
+- `--companion-input DIR` — staged companion Markdown directory (default: `companion_sources/`)
+- `--companion-manifest FILE` — `companion_manifest.json` from step 2b; **enables** the supplemental corpus when provided (Markdown chunks are appended with stable `companion://…` page keys and provenance metadata)
 - `--verbose` — print each chunk as it is created
 
 ### 4. Build the semantic index
@@ -99,7 +116,7 @@ Options:
 ### Full workflow
 
 ```bash
-python build_url_tree.py --validate && python main.py && python chunk_docs.py --verbose && python build_index.py --verify
+python build_url_tree.py --validate && python main.py && python fetch_companion.py && python chunk_docs.py --verbose --companion-manifest companion_manifest.json && python build_index.py --verify
 ```
 
 GitHub Actions uses the same flow, but splits the scrape into four balanced shards and runs at most two of them in parallel to stay within workflow time limits and reduce load on Boomi.
