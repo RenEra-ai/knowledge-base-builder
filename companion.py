@@ -115,7 +115,9 @@ def companion_chunk_id(source_path, index):
     base = re.sub(r"[^a-zA-Z0-9_]", "_", base).strip("_").lower()
     if len(base) > 40:
         base = base[:40].rstrip("_")
-    digest = hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:6]
+    # 12 hex (48 bits) of the full path so distinct paths sharing a basename do
+    # not collide; build_index's duplicate-id gate is the loud backstop.
+    digest = hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:12]
     return f"companion_{base}_{digest}_{index:03d}"
 
 

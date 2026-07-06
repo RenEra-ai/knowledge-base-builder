@@ -55,6 +55,12 @@ PROVENANCE_METADATA_FIELDS = (
     "source_path", "raw_url", "latest_url",
 )
 
+# The five extended provenance fields that companion chunks must populate with
+# real values and official chunks must leave blank.
+PROVENANCE_REAL_VALUE_FIELDS = (
+    "upstream_repo", "upstream_commit", "source_path", "raw_url", "latest_url",
+)
+
 VERIFY_QUERIES = [
     "How do environment extensions work?",
     "Configure a database connector",
@@ -98,6 +104,25 @@ def validate_chunks(chunks):
         idx = chunk["chunk_index"]
         if not isinstance(idx, int) or isinstance(idx, bool):
             errors.append(f"chunk {i} ({chunk.get('id')!r}) has non-integer chunk_index: {idx!r}")
+
+        # Provenance contract: companion chunks must carry real attribution;
+        # official chunks must leave the five extended fields blank. Only these
+        # two source_types are validated, so official-only corpora and any future
+        # type stay backward-compatible.
+        stype = chunk.get("source_type")
+        if stype == COMPANION_SOURCE_TYPE:
+            for field in PROVENANCE_REAL_VALUE_FIELDS:
+                value = chunk.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(
+                        f"chunk {i} ({chunk.get('id')!r}) companion chunk has empty {field!r}"
+                    )
+        elif stype == OFFICIAL_SOURCE_TYPE:
+            for field in PROVENANCE_REAL_VALUE_FIELDS:
+                if chunk.get(field, ""):
+                    errors.append(
+                        f"chunk {i} ({chunk.get('id')!r}) official chunk must leave {field!r} blank"
+                    )
 
     by_page = {}
     for chunk in chunks:

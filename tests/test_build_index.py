@@ -16,6 +16,7 @@ from build_index import (
     VERIFY_QUERIES,
     build_companion_summary,
     build_manifest,
+    validate_chunks,
     verify_index,
 )
 
@@ -38,7 +39,7 @@ def _valid_chunk(**overrides):
         "verification_status": "official",
         "upstream_repo": "",
         "upstream_commit": "",
-        "source_path": "x.html",
+        "source_path": "",
         "raw_url": "",
         "latest_url": "",
     }
@@ -63,6 +64,23 @@ def _companion_chunk(**overrides):
     )
     chunk.update(overrides)
     return chunk
+
+
+# --- validate_chunks: provenance contract -------------------------------------
+
+def test_validate_chunks_accepts_official_blank_and_companion_populated():
+    assert validate_chunks([_valid_chunk()]) == []
+    assert validate_chunks([_companion_chunk()]) == []
+
+
+def test_validate_chunks_rejects_companion_missing_provenance():
+    errors = validate_chunks([_companion_chunk(upstream_commit="")])
+    assert any("companion chunk has empty 'upstream_commit'" in e for e in errors)
+
+
+def test_validate_chunks_rejects_official_with_nonblank_extended_field():
+    errors = validate_chunks([_valid_chunk(source_path="x.html")])
+    assert any("official chunk must leave 'source_path' blank" in e for e in errors)
 
 
 # --- build_manifest -----------------------------------------------------------

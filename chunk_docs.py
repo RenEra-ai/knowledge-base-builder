@@ -345,13 +345,13 @@ def chunk_file(filepath, filename, min_tokens, max_tokens, verbose):
             "content": content_text,
             "content_html": raw["content_html"],
             "token_estimate": token_est,
-            # Official docs carry the provenance defaults so both corpora satisfy
-            # one uniform chunk contract (companion chunks override these).
+            # Official docs carry blank provenance for all five extended fields
+            # (source_url is their citation); companion chunks override these.
             "source_type": OFFICIAL_SOURCE_TYPE,
             "verification_status": OFFICIAL_VERIFICATION_STATUS,
             "upstream_repo": "",
             "upstream_commit": "",
-            "source_path": filename,
+            "source_path": "",
             "raw_url": "",
             "latest_url": "",
         }
