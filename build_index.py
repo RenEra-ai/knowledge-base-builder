@@ -15,6 +15,15 @@ from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+# Provenance label constants live in companion.py (pure stdlib) — the single
+# source of truth shared with chunk_docs.py, so the official/companion labels and
+# the where-filter never drift between producer and index.
+from companion import (
+    COMPANION_SOURCE_TYPE,
+    OFFICIAL_SOURCE_TYPE,
+    OFFICIAL_VERIFICATION_STATUS,
+)
+
 # chromadb / sentence-transformers are imported lazily inside main() — see note
 # there — so the pure helpers in this module stay importable without the heavy
 # ML stack installed.
@@ -45,9 +54,6 @@ PROVENANCE_METADATA_FIELDS = (
     "source_type", "verification_status", "upstream_repo", "upstream_commit",
     "source_path", "raw_url", "latest_url",
 )
-
-COMPANION_SOURCE_TYPE = "companion_reference"
-OFFICIAL_SOURCE_TYPE = "official"
 
 VERIFY_QUERIES = [
     "How do environment extensions work?",
@@ -141,7 +147,7 @@ def build_index(chunks, collection, batch_size, verbose):
                 # Provenance (empty strings for official docs). Chroma metadata
                 # must be scalars, so default missing values to "" not None.
                 "source_type": c.get("source_type", OFFICIAL_SOURCE_TYPE),
-                "verification_status": c.get("verification_status", OFFICIAL_SOURCE_TYPE),
+                "verification_status": c.get("verification_status", OFFICIAL_VERIFICATION_STATUS),
                 "upstream_repo": c.get("upstream_repo", ""),
                 "upstream_commit": c.get("upstream_commit", ""),
                 "source_path": c.get("source_path", ""),
