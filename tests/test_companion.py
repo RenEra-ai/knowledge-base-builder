@@ -197,3 +197,13 @@ def test_strip_xml_blocks_strips_large_untagged_xml_tree():
     out = companion.strip_xml_blocks(f"```\n{xml}\n```")
     assert "bns:Component" not in out
     assert "omitted" in out
+
+
+def test_strip_xml_blocks_strips_untagged_xml_led_by_comment_or_doctype():
+    # A raw-XML export that opens with a comment or DOCTYPE header (not the root
+    # element) must still be recognized as XML and stripped.
+    tree = ("<bns:Component>\n" + ("  <field/>\n" * 300) + "</bns:Component>")
+    for prefix in ("<!-- exported from AtomSphere -->\n", "<!DOCTYPE bns>\n"):
+        out = companion.strip_xml_blocks(f"```\n{prefix}{tree}\n```")
+        assert "bns:Component" not in out, prefix
+        assert "omitted" in out, prefix

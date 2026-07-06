@@ -134,10 +134,14 @@ _XML_FENCE_RE = re.compile(
     r"^([ \t]*)(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+-]*)[ \t]*\n(.*?)\n[ \t]*\2[ \t]*$",
     re.DOTALL | re.MULTILINE,
 )
-# An untagged fence counts as XML only when its body BEGINS with an XML
-# declaration or element — so a Groovy/config block that merely contains an
-# angle-bracket token (List<String>, "Bearer <token>") is not stripped.
-_XML_START_RE = re.compile(r"\s*(<\?xml|<[A-Za-z])")
+# An untagged fence counts as XML only when its body BEGINS (after optional
+# leading whitespace) with XML/SGML markup: a declaration, comment, DOCTYPE,
+# CDATA, or an element. Anchoring to the start avoids matching a mid-body
+# angle-bracket token (List<String>, "Bearer <token>") in a Groovy/config block,
+# while still catching an export that opens with a comment or DOCTYPE header.
+_XML_START_RE = re.compile(
+    r"\s*(<\?xml|<!--|<!\[CDATA\[|<!DOCTYPE|<[A-Za-z])", re.IGNORECASE
+)
 
 
 def _clean_heading(text):

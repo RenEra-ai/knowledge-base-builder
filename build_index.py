@@ -47,6 +47,7 @@ PROVENANCE_METADATA_FIELDS = (
 )
 
 COMPANION_SOURCE_TYPE = "companion_reference"
+OFFICIAL_SOURCE_TYPE = "official"
 
 VERIFY_QUERIES = [
     "How do environment extensions work?",
@@ -139,8 +140,8 @@ def build_index(chunks, collection, batch_size, verbose):
                 "token_estimate": c["token_estimate"],
                 # Provenance (empty strings for official docs). Chroma metadata
                 # must be scalars, so default missing values to "" not None.
-                "source_type": c.get("source_type", "official"),
-                "verification_status": c.get("verification_status", "official"),
+                "source_type": c.get("source_type", OFFICIAL_SOURCE_TYPE),
+                "verification_status": c.get("verification_status", OFFICIAL_SOURCE_TYPE),
                 "upstream_repo": c.get("upstream_repo", ""),
                 "upstream_commit": c.get("upstream_commit", ""),
                 "source_path": c.get("source_path", ""),
@@ -184,15 +185,15 @@ def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE, queries=None):
             print("    (no results)")
             failures.append((query, "no results"))
             continue
-        for i, distance in enumerate(distances):
-            meta = metas[i]
-            stype = meta.get("source_type", "official")
-            print(f"    {i+1}. [{distance:.3f}] ({stype}) {meta['title']} > {meta['section_heading']}")
+        for rank, (distance, meta) in enumerate(zip(distances, metas), start=1):
+            stype = meta.get("source_type", OFFICIAL_SOURCE_TYPE)
+            print(f"    {rank}. [{distance:.3f}] ({stype}) {meta['title']} > {meta['section_heading']}")
 
         # The where-filter already restricts hits to the expected source_type, so
         # a within-threshold hit is sufficient.
-        if min(distances) > max_distance:
-            failures.append((query, f"best distance {min(distances):.3f}"))
+        best = min(distances)
+        if best > max_distance:
+            failures.append((query, f"best distance {best:.3f}"))
 
     if failures:
         print(f"\nFAILED: {len(failures)} verify query(ies) below quality bar:")
@@ -267,7 +268,7 @@ def build_manifest(chunks, args, embedding_dim):
     if not source_roots:
         source_roots = ["https://help.boomi.com"]
 
-    source_type_counts = dict(Counter(c.get("source_type", "official") for c in chunks))
+    source_type_counts = dict(Counter(c.get("source_type", OFFICIAL_SOURCE_TYPE) for c in chunks))
 
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -444,7 +445,7 @@ def main():
         # Official queries verify official docs; companion queries verify
         # companion content — each metadata-filtered to its own source_type so
         # neither gate can be satisfied (or false-failed) by the other corpus.
-        queries = [(q, "official") for q in VERIFY_QUERIES]
+        queries = [(q, OFFICIAL_SOURCE_TYPE) for q in VERIFY_QUERIES]
         if manifest.get("companion"):  # reuse the summary build_manifest computed
             queries += [(q, COMPANION_SOURCE_TYPE) for q in COMPANION_VERIFY_QUERIES]
         if not verify_index(collection, args.verify_threshold, queries):
