@@ -132,6 +132,31 @@ def test_chunk_markdown_file_mixed_with_official_contiguous_index(tmp_path):
     assert any(k.startswith("https://") for k in by_key)
 
 
+def test_chunk_markdown_file_oversize_does_not_duplicate_heading(tmp_path):
+    # A section larger than max_tokens is paragraph-split; the heading must be
+    # prepended exactly once per sub-chunk, never doubled ("Purpose\nPurpose").
+    body = "\n\n".join(f"Paragraph {i} carries enough words to matter." for i in range(8))
+    md = _write(tmp_path, "big.md", f"# Doc\n\n## Purpose\n\n{body}\n")
+    chunks = chunk_markdown_file(
+        md, _entry(path="references/components/x.md"), UPSTREAM,
+        min_tokens=0, max_tokens=20,
+    )
+    assert len(chunks) > 1  # oversize split actually happened
+    for c in chunks:
+        assert not c["content"].startswith("Purpose\nPurpose")
+        assert c["content"].count("Purpose") <= 1
+
+
+def test_process_companion_rejects_denied_manifest_path(tmp_path):
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    manifest = {"repo": "R", "commit": "d" * 40, "files": [_entry(path="/etc/passwd")]}
+    mpath = tmp_path / "companion_manifest.json"
+    mpath.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="disallowed path"):
+        process_companion(str(mpath), str(staging), 0, 100_000)
+
+
 def test_process_companion_reads_staging_and_fails_on_missing(tmp_path):
     staging = tmp_path / "staging"
     (staging / "references/components").mkdir(parents=True)

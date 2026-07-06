@@ -26,6 +26,7 @@ from companion import (
     PROVENANCE_FIELDS,
     companion_chunk_id,
     filter_sections,
+    is_denied_path,
     split_markdown_sections,
     strip_xml_blocks,
 )
@@ -478,7 +479,10 @@ def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbos
             content_text = heading + "\n" + body if body.strip() else heading
         else:
             content_text = body
-        content_html = markdown.markdown(content_text, extensions=["fenced_code", "tables"])
+        # content_html is body-only (heading excluded), mirroring the HTML path's
+        # elements_to_html. The oversize split re-prepends the heading exactly
+        # once; rendering from heading-inclusive content_text would duplicate it.
+        content_html = markdown.markdown(body, extensions=["fenced_code", "tables"])
 
         raw = {
             "heading_text": heading,
@@ -549,7 +553,13 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
     upstream = {"repo": manifest["repo"], "commit": manifest["commit"]}
     all_companion = []
     for entry in manifest["files"]:
-        md_path = os.path.join(staging_dir, entry["path"])
+        path = entry["path"]
+        # Re-validate even though fetch_companion already did: an absolute or
+        # ../ path in a corrupted manifest would escape the staging dir via
+        # os.path.join. Fail closed rather than read an arbitrary file.
+        if is_denied_path(path):
+            raise ValueError(f"Companion manifest contains a disallowed path: {path!r}")
+        md_path = os.path.join(staging_dir, path)
         if not os.path.isfile(md_path):
             raise FileNotFoundError(f"Staged companion file missing: {md_path}")
         file_chunks = chunk_markdown_file(

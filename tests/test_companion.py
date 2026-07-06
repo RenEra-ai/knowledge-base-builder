@@ -99,6 +99,15 @@ def test_split_markdown_sections_captures_preamble():
     assert secs[1]["heading"] == "Title"
 
 
+def test_split_markdown_sections_strips_closed_atx_hashes():
+    # A closed-ATX heading's trailing '#' run must not leak into the heading text.
+    secs = companion.split_markdown_sections("## Configuration ##\n\nbody")
+    assert secs[0]["heading"] == "Configuration"
+    # A '#' not preceded by whitespace (e.g. a language name) is preserved.
+    secs2 = companion.split_markdown_sections("## Using C#\n\nbody")
+    assert secs2[0]["heading"] == "Using C#"
+
+
 # --- filter_sections ----------------------------------------------------------
 
 def _secs(*pairs):
@@ -171,3 +180,20 @@ def test_strip_xml_blocks_keeps_small_xml_and_other_languages():
     out = companion.strip_xml_blocks(md)
     assert "<field" in out          # small xml kept
     assert "x = 1" in out           # large groovy kept (not xml)
+
+
+def test_strip_xml_blocks_keeps_large_untagged_non_xml_with_angle_tokens():
+    # A large UNTAGGED fence that merely contains an angle-bracket token (Java
+    # generics, a "<token>" placeholder) is not XML and must be kept.
+    groovy = "def items = new ArrayList<String>()\n" + ("items.add(x)\n" * 300)
+    out = companion.strip_xml_blocks(f"```\n{groovy}\n```")
+    assert "items.add" in out
+    assert "ArrayList<String>" in out
+
+
+def test_strip_xml_blocks_strips_large_untagged_xml_tree():
+    # A large untagged fence whose body BEGINS with an XML element is stripped.
+    xml = "<bns:Component>\n" + ("  <field/>\n" * 300) + "</bns:Component>"
+    out = companion.strip_xml_blocks(f"```\n{xml}\n```")
+    assert "bns:Component" not in out
+    assert "omitted" in out

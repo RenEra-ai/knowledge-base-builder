@@ -123,6 +123,26 @@ def companion_chunk_id(source_path, index):
 
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.*\S)\s*$")
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+# A closed-ATX heading's trailing "#" run (must be space-separated, so "C#" is
+# left intact) — stripped from the parsed heading per CommonMark.
+_ATX_CLOSE_RE = re.compile(r"\s+#+\s*$")
+
+# Oversized raw-XML fenced code blocks. The fence marker is 3+ backticks/tildes
+# (matching _fence_marker), and the closing \2 backreference requires the same
+# run. Hoisted to module scope so it is compiled once, not per strip call.
+_XML_FENCE_RE = re.compile(
+    r"^([ \t]*)(`{3,}|~{3,})[ \t]*([A-Za-z0-9_+-]*)[ \t]*\n(.*?)\n[ \t]*\2[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
+# An untagged fence counts as XML only when its body BEGINS with an XML
+# declaration or element — so a Groovy/config block that merely contains an
+# angle-bracket token (List<String>, "Bearer <token>") is not stripped.
+_XML_START_RE = re.compile(r"\s*(<\?xml|<[A-Za-z])")
+
+
+def _clean_heading(text):
+    """Strip a closed-ATX heading's trailing ``#`` run, then surrounding space."""
+    return _ATX_CLOSE_RE.sub("", text).strip()
 
 
 def _fence_marker(line):
@@ -179,7 +199,7 @@ def split_markdown_sections(md_text):
                 sections.append(current)
             current = {
                 "level": len(match.group(1)),
-                "heading": match.group(2).strip(),
+                "heading": _clean_heading(match.group(2)),
                 "body_lines": [],
             }
         else:
@@ -254,19 +274,14 @@ def strip_xml_blocks(md_text, min_chars=XML_STRIP_MIN_CHARS):
     <bns:Component> serializations. Groovy/JSON/bash fences and small inline XML
     examples are left untouched.
     """
-    fence = re.compile(
-        r"^([ \t]*)(```|~~~)[ \t]*([A-Za-z0-9_+-]*)[ \t]*\n(.*?)\n[ \t]*\2[ \t]*$",
-        re.DOTALL | re.MULTILINE,
-    )
-
     def _replace(m):
         lang = m.group(3).lower()
         body = m.group(4)
         looks_xml = lang in ("xml", "xsd") or (
-            lang == "" and re.search(r"<\?xml|<[A-Za-z][\w:.-]*[\s/>]", body)
+            lang == "" and _XML_START_RE.match(body) is not None
         )
         if looks_xml and len(body) >= min_chars:
             return f"{m.group(1)}> _(raw XML component definition omitted — see source)_"
         return m.group(0)
 
-    return fence.sub(_replace, md_text)
+    return _XML_FENCE_RE.sub(_replace, md_text)

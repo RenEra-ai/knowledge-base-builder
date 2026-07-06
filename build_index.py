@@ -158,13 +158,14 @@ def build_index(chunks, collection, batch_size, verbose):
 def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE, queries=None):
     """Run smoke queries and return True only if the index is release-quality.
 
-    ``queries`` is a list of ``(query_text, expected_source_type)`` pairs;
-    ``expected_source_type`` of ``None`` accepts any hit (the official gate),
-    while ``"companion_reference"`` additionally requires a matching-typed hit —
-    proving companion content is retrievable. Defaults to the official
-    VERIFY_QUERIES. The gate: every query must return at least one hit within
-    ``max_distance`` (and of the expected type). Returns False (and prints the
-    offending queries) otherwise so callers can fail the build.
+    ``queries`` is a list of ``(query_text, expected_source_type)`` pairs. When
+    ``expected_source_type`` is set the query is metadata-filtered to that
+    source_type, so each gate verifies *its own* corpus independently: the
+    official gate cannot be satisfied by a companion hit, and the companion gate
+    cannot false-fail because official docs out-rank companion content in the
+    top-k. ``None`` accepts any hit. Defaults to the official VERIFY_QUERIES. The
+    gate: every query must return a hit within ``max_distance``. Returns False
+    (and prints the offending queries) otherwise so callers can fail the build.
     """
     if queries is None:
         queries = [(q, None) for q in VERIFY_QUERIES]
@@ -172,29 +173,26 @@ def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE, queries=None):
     print("\nVerification — test queries:")
     failures = []
     for query, expected_type in queries:
-        results = collection.query(query_texts=[query], n_results=3)
+        where = {"source_type": expected_type} if expected_type else None
+        results = collection.query(query_texts=[query], n_results=3, where=where)
         ids = results["ids"][0]
         distances = results["distances"][0]
         metas = results["metadatas"][0]
-        print(f"\n  Q: {query}")
+        label = f"{query!r} [{expected_type}]" if expected_type else repr(query)
+        print(f"\n  Q: {label}")
         if not ids:
             print("    (no results)")
             failures.append((query, "no results"))
             continue
-        for i, (_doc_id, distance) in enumerate(zip(ids, distances)):
+        for i, distance in enumerate(distances):
             meta = metas[i]
             stype = meta.get("source_type", "official")
             print(f"    {i+1}. [{distance:.3f}] ({stype}) {meta['title']} > {meta['section_heading']}")
 
-        close = [
-            (distances[i], metas[i].get("source_type", "official"))
-            for i in range(len(ids))
-            if distances[i] <= max_distance
-        ]
-        if not close:
+        # The where-filter already restricts hits to the expected source_type, so
+        # a within-threshold hit is sufficient.
+        if min(distances) > max_distance:
             failures.append((query, f"best distance {min(distances):.3f}"))
-        elif expected_type is not None and not any(st == expected_type for _, st in close):
-            failures.append((query, f"no {expected_type} hit within {max_distance}"))
 
     if failures:
         print(f"\nFAILED: {len(failures)} verify query(ies) below quality bar:")
@@ -310,11 +308,13 @@ def build_companion_summary(chunks):
     repos = sorted({c.get("upstream_repo", "") for c in companion_chunks if c.get("upstream_repo")})
     commits = sorted({c.get("upstream_commit", "") for c in companion_chunks if c.get("upstream_commit")})
     file_paths = {c.get("source_path", "") for c in companion_chunks if c.get("source_path")}
-    # area = second breadcrumb segment ("Companion Reference > <area> > <title>").
+    # area = middle breadcrumb segment of "Companion Reference > <area> > <title>".
+    # Require all three segments: a 2-part breadcrumb (empty area) would otherwise
+    # count the document title as an area.
     area_counts = Counter(
         parts[1].strip()
         for parts in (c.get("breadcrumb", "").split(" > ") for c in companion_chunks)
-        if len(parts) >= 2 and parts[1].strip()
+        if len(parts) >= 3 and parts[1].strip()
     )
 
     return {
@@ -441,11 +441,11 @@ def main():
     print(f"Wrote manifest: {manifest_path}")
 
     if args.verify:
-        queries = [(q, None) for q in VERIFY_QUERIES]
-        has_companion = any(
-            c.get("source_type") == COMPANION_SOURCE_TYPE for c in chunks
-        )
-        if has_companion:
+        # Official queries verify official docs; companion queries verify
+        # companion content — each metadata-filtered to its own source_type so
+        # neither gate can be satisfied (or false-failed) by the other corpus.
+        queries = [(q, "official") for q in VERIFY_QUERIES]
+        if manifest.get("companion"):  # reuse the summary build_manifest computed
             queries += [(q, COMPANION_SOURCE_TYPE) for q in COMPANION_VERIFY_QUERIES]
         if not verify_index(collection, args.verify_threshold, queries):
             sys.exit(1)

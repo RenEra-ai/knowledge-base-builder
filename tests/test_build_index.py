@@ -183,16 +183,24 @@ class FakeCollection:
         self._distances = distances_by_query
         self._source_types = source_types_by_query or {}
 
-    def query(self, query_texts, n_results):
+    def query(self, query_texts, n_results, where=None):
         q = query_texts[0]
         distances = self._distances.get(q, [])
         stypes = self._source_types.get(q, ["official"] * len(distances))
-        ids = [f"id-{i}" for i in range(len(distances))]
+        rows = list(zip(distances, stypes))
+        if where and "source_type" in where:
+            rows = [(d, st) for d, st in rows if st == where["source_type"]]
+        rows = rows[:n_results]
+        ids = [f"id-{i}" for i in range(len(rows))]
         metas = [
-            {"title": "T", "section_heading": "S", "source_type": stypes[i]}
-            for i in range(len(distances))
+            {"title": "T", "section_heading": "S", "source_type": st}
+            for _, st in rows
         ]
-        return {"ids": [ids], "distances": [distances], "metadatas": [metas]}
+        return {
+            "ids": [ids],
+            "distances": [[d for d, _ in rows]],
+            "metadatas": [metas],
+        }
 
 
 def test_verify_index_passes_when_all_queries_have_close_hit():
@@ -225,13 +233,25 @@ def test_verify_index_passes_companion_query_with_matching_typed_hit():
 
 def test_verify_index_fails_companion_query_when_only_official_hits_close():
     # A companion query whose only within-threshold hits are official docs must
-    # fail — companion content is not actually retrievable.
+    # fail — the source_type filter removes the official hits, so companion
+    # content is not actually retrievable within threshold.
     q = COMPANION_VERIFY_QUERIES[0]
     collection = FakeCollection(
         {q: [0.20, 0.80]},
         {q: ["official", "companion_reference"]},  # companion hit is too far
     )
     assert verify_index(collection, queries=[(q, "companion_reference")]) is False
+
+
+def test_verify_index_official_query_not_satisfied_by_companion_hit():
+    # The official gate must not pass on a companion hit: with the source_type
+    # filter, a query whose only close hits are companion returns nothing.
+    q = VERIFY_QUERIES[0]
+    collection = FakeCollection(
+        {q: [0.20, 0.30]},
+        {q: ["companion_reference", "companion_reference"]},
+    )
+    assert verify_index(collection, queries=[(q, "official")]) is False
 
 
 # --- input-validation gates (subprocess) --------------------------------------
