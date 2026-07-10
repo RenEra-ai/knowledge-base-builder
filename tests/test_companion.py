@@ -237,6 +237,24 @@ def test_contains_raw_component_xml_ignores_wanted_bns_snippets():
     assert not companion.contains_raw_component_xml("the bns:Component root element")
 
 
+def test_contains_raw_component_xml_detects_default_namespace_root():
+    # Boomi also serializes a component root without the bns: prefix, as a
+    # default-namespaced <Component …> carrying componentId/name/type. The gate
+    # must catch that form too (upstream databasev2 docs use it).
+    assert companion.contains_raw_component_xml(
+        '<Component componentId="" name="Op" type="database">'
+    )
+    assert companion.contains_raw_component_xml('<Component xmlns="http://api.platform.boomi.com/">')
+
+
+def test_contains_raw_component_xml_ignores_bare_component_mention():
+    # A prose mention of a bare "<Component>" (no serialization attribute) is
+    # not a template and must not fail the build.
+    assert not companion.contains_raw_component_xml("update the `<Component>` element via the API")
+    # A different element whose name merely starts with "Component" is not a hit.
+    assert not companion.contains_raw_component_xml('<ComponentReference id="x"/>')
+
+
 def test_contains_raw_component_xml_handles_non_strings():
     assert not companion.contains_raw_component_xml(None)
     assert not companion.contains_raw_component_xml(123)

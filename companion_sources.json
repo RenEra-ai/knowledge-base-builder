@@ -78,7 +78,7 @@
       "area": "Steps",
       "title": "REST Connector Step",
       "sections": null,
-      "drop_sections": ["configuration structure", "required components", "reference xml examples"],
+      "drop_sections": ["configuration structure", "required components", "reference xml examples", "document clearing for get requests"],
       "strip_xml_blocks": true
     },
     {
@@ -95,8 +95,8 @@
       "priority": 4,
       "area": "Steps",
       "title": "Data Process Groovy Step",
-      "sections": null,
-      "drop_sections": ["complete examples", "xml configuration"],
+      "sections": ["purpose", "development philosophy", "core groovy patterns", "working with properties", "critical rules and gotchas"],
+      "drop_sections": null,
       "strip_xml_blocks": true
     },
     {

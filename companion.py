@@ -51,25 +51,38 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 XML_STRIP_MIN_CHARS = 1500
 
 # The root element of a Boomi component serialization. Its presence in a chunk
-# means a canned <bns:Component> template reached the KB.
+# means a canned component template reached the KB.
 #
-# This targets the <bns:Component> component definitions specifically — the
-# canned component templates the corpus never ingests — NOT every fragment of
-# low-level XML. Small illustrative XML is permitted as short context per the
-# ingestion plan ("Exclude large canned XML examples except where needed as
-# short context"): field snippets, a process-shape (<shape>/<dataprocess>)
-# naming example, and <bns:encryptedValues> token blocks are all wanted content.
-# Those are governed by strip_xml_blocks (which drops the oversized blocks) plus
-# per-file section drops — this marker is only the fail-closed backstop for the
+# The upstream repo emits component roots in TWO forms: the prefixed
+# ``<bns:Component …>`` and the default-namespaced ``<Component componentId="…">``
+# (see the Companion's boomi-common.sh, which handles both). The literal marker
+# catches the prefixed form; _COMPONENT_ROOT_RE catches the default-namespaced
+# form, requiring a serialization attribute (componentId/xmlns/type) so a bare
+# prose "<Component>" mention and the wanted <bns:encryptedValues> token blocks
+# do NOT trip the gate.
+#
+# This targets component-root definitions specifically — the canned component
+# templates the corpus never ingests — NOT every fragment of low-level XML.
+# Small illustrative XML is permitted as short context per the ingestion plan
+# ("Exclude large canned XML examples except where needed as short context"):
+# field snippets and <bns:encryptedValues> token blocks are wanted content,
+# governed by strip_xml_blocks (which drops the oversized blocks) plus per-file
+# section drops. This gate is only the fail-closed backstop for the
 # component-serialization case that must never ship.
 #
 # strip_xml_blocks() alone cannot enforce even that narrow case: it is
 # size-based, and several component skeletons upstream are *under*
 # XML_STRIP_MIN_CHARS (map_component's examples are 516-699 chars), so they must
-# be excluded by dropping their sections in the allowlist. The marker is also
-# deliberately narrower than a "<bns:" prefix test, so the small
-# <bns:encryptedValues> snippets survive.
+# be excluded by dropping their sections in the allowlist.
 RAW_COMPONENT_XML_MARKER = "<bns:Component"
+
+# Default-namespaced component root: ``<Component …>`` (or any ``<prefix:Component>``)
+# carrying a serialization attribute. ``Component\b`` avoids matching
+# ``<ComponentReference>`` / ``<Components>``; the attribute requirement avoids a
+# bare prose "<Component>" and the wanted <bns:encryptedValues> snippet.
+_COMPONENT_ROOT_RE = re.compile(
+    r"<(?:[A-Za-z][\w.-]*:)?Component\b[^>]*\b(?:componentId|xmlns|type)\s*="
+)
 
 # Basenames that must never be fetched even if an allowlist names them.
 _DENIED_BASENAMES = {"readme.md", "claude.md", "boomi_error_reference.md"}
@@ -315,11 +328,14 @@ def strip_xml_blocks(md_text, min_chars=XML_STRIP_MIN_CHARS):
 
 
 def contains_raw_component_xml(text):
-    """True if ``text`` carries a raw <bns:Component> serialization.
+    """True if ``text`` carries a raw component serialization (<bns:Component>
+    or a default-namespaced <Component …> root).
 
     Used as a fail-closed release gate (see build_index.validate_chunks): no
     companion chunk may ship a canned component template, regardless of whether
     it slipped past the size-based strip or an allowlist entry forgot to drop
     its "Component Structure" / "Complete Examples" / "XML Structure" section.
     """
-    return isinstance(text, str) and RAW_COMPONENT_XML_MARKER in text
+    if not isinstance(text, str):
+        return False
+    return RAW_COMPONENT_XML_MARKER in text or _COMPONENT_ROOT_RE.search(text) is not None
