@@ -207,3 +207,36 @@ def test_strip_xml_blocks_strips_untagged_xml_led_by_comment_or_doctype():
         out = companion.strip_xml_blocks(f"```\n{prefix}{tree}\n```")
         assert "bns:Component" not in out, prefix
         assert "omitted" in out, prefix
+
+
+def test_strip_xml_blocks_keeps_component_skeleton_under_threshold():
+    # Documents the gap that makes contains_raw_component_xml() necessary:
+    # strip_xml_blocks is size-based, so the sub-threshold component skeletons
+    # upstream (map_component's examples are 516-699 chars) survive it. Only a
+    # section drop removes those.
+    small = "<bns:Component type=\"map\">\n  <field/>\n</bns:Component>"
+    assert len(small) < companion.XML_STRIP_MIN_CHARS
+    out = companion.strip_xml_blocks(f"```xml\n{small}\n```")
+    assert "<bns:Component" in out
+
+
+# --- contains_raw_component_xml -----------------------------------------------
+
+def test_contains_raw_component_xml_detects_component_root():
+    assert companion.contains_raw_component_xml('<bns:Component type="map">')
+    # Size-independent: the sub-threshold skeletons strip_xml_blocks keeps.
+    assert companion.contains_raw_component_xml("a\n```xml\n<bns:Component/>\n```\n")
+
+
+def test_contains_raw_component_xml_ignores_wanted_bns_snippets():
+    # The gate must not ban every bns: tag — encrypted-token handling snippets
+    # are curated content the allowlist deliberately keeps.
+    assert not companion.contains_raw_component_xml("<bns:encryptedValues>x</bns:encryptedValues>")
+    assert not companion.contains_raw_component_xml("<bns:encryptedValue/>")
+    # Prose naming the element without serializing it is fine.
+    assert not companion.contains_raw_component_xml("the bns:Component root element")
+
+
+def test_contains_raw_component_xml_handles_non_strings():
+    assert not companion.contains_raw_component_xml(None)
+    assert not companion.contains_raw_component_xml(123)

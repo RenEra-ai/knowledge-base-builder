@@ -90,6 +90,31 @@ def test_validate_chunks_rejects_official_none_extended_field():
     assert any("official chunk must leave 'source_path' blank" in e for e in errors)
 
 
+# --- validate_chunks: raw component XML gate ----------------------------------
+
+def test_validate_chunks_rejects_companion_raw_component_xml():
+    # Fail closed when a canned component template reaches the corpus, even at a
+    # size strip_xml_blocks leaves alone.
+    chunk = _companion_chunk(
+        content='Minimal Creation Format\n```xml\n<bns:Component type="map"/>\n```',
+        section_heading="Minimal Creation Format",
+    )
+    errors = validate_chunks([chunk])
+    assert any("raw <bns:Component> XML" in e for e in errors)
+    # The error must name the offending source so the allowlist entry is findable.
+    assert any("map_component.md" in e and "Minimal Creation Format" in e for e in errors)
+
+
+def test_validate_chunks_allows_companion_encrypted_values_snippet():
+    # The gate is narrower than a "<bns:" prefix test on purpose: the MCP Server
+    # connection component's encrypted-token snippets are wanted content.
+    chunk = _companion_chunk(
+        content="Authentication Patterns\n```xml\n<bns:encryptedValues>tok</bns:encryptedValues>\n```",
+        source_path="references/components/mcp_server_connection_component.md",
+    )
+    assert validate_chunks([chunk]) == []
+
+
 # --- build_manifest -----------------------------------------------------------
 
 def _args(model="all-MiniLM-L6-v2", artifact_tag="kb-42", builder_commit="abc1234"):

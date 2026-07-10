@@ -22,6 +22,7 @@ from companion import (
     COMPANION_SOURCE_TYPE,
     OFFICIAL_SOURCE_TYPE,
     OFFICIAL_VERIFICATION_STATUS,
+    contains_raw_component_xml,
 )
 
 # chromadb / sentence-transformers are imported lazily inside main() — see note
@@ -117,6 +118,16 @@ def validate_chunks(chunks):
                     errors.append(
                         f"chunk {i} ({chunk.get('id')!r}) companion chunk has empty {field!r}"
                     )
+            # The corpus is curated to exclude low-level XML-building content. A
+            # raw <bns:Component> template here means an allowlist entry lost its
+            # section drop, or a skeleton sits under the size-based strip
+            # threshold. Fail the build rather than ship it.
+            if contains_raw_component_xml(chunk.get("content")):
+                errors.append(
+                    f"chunk {i} ({chunk.get('id')!r}) companion chunk contains raw "
+                    f"<bns:Component> XML (source_path={chunk.get('source_path')!r}, "
+                    f"section={chunk.get('section_heading')!r})"
+                )
         elif stype == OFFICIAL_SOURCE_TYPE:
             for field in PROVENANCE_REAL_VALUE_FIELDS:
                 # Must be exactly the empty string (missing key -> "" is fine).

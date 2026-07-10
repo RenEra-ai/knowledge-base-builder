@@ -50,6 +50,18 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 # <bns:Component> serializations we deliberately do not ingest.
 XML_STRIP_MIN_CHARS = 1500
 
+# The root element of a Boomi component serialization. Its presence in a chunk
+# means a canned <bns:Component> template reached the KB — the exact low-level
+# XML-building content the corpus is curated to exclude.
+#
+# strip_xml_blocks() alone cannot enforce this: it is size-based, and several
+# component skeletons upstream are *under* XML_STRIP_MIN_CHARS (map_component's
+# examples are 516-699 chars). Those must be excluded by dropping their sections
+# in the allowlist. This marker is the fail-closed backstop for both paths, and
+# is deliberately narrower than a "<bns:" prefix test: small <bns:encryptedValues>
+# snippets are wanted content (encrypted-token handling).
+RAW_COMPONENT_XML_MARKER = "<bns:Component"
+
 # Basenames that must never be fetched even if an allowlist names them.
 _DENIED_BASENAMES = {"readme.md", "claude.md", "boomi_error_reference.md"}
 
@@ -291,3 +303,14 @@ def strip_xml_blocks(md_text, min_chars=XML_STRIP_MIN_CHARS):
         return m.group(0)
 
     return _XML_FENCE_RE.sub(_replace, md_text)
+
+
+def contains_raw_component_xml(text):
+    """True if ``text`` carries a raw <bns:Component> serialization.
+
+    Used as a fail-closed release gate (see build_index.validate_chunks): no
+    companion chunk may ship a canned component template, regardless of whether
+    it slipped past the size-based strip or an allowlist entry forgot to drop
+    its "Component Structure" / "Complete Examples" / "XML Structure" section.
+    """
+    return isinstance(text, str) and RAW_COMPONENT_XML_MARKER in text
