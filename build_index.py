@@ -118,10 +118,12 @@ def validate_chunks(chunks):
                     errors.append(
                         f"chunk {i} ({chunk.get('id')!r}) companion chunk has empty {field!r}"
                     )
-            # The corpus is curated to exclude low-level XML-building content. A
-            # raw <bns:Component> template here means an allowlist entry lost its
-            # section drop, or a skeleton sits under the size-based strip
-            # threshold. Fail the build rather than ship it.
+            # The corpus never ingests canned <bns:Component> component
+            # templates. A raw one here means an allowlist entry lost its section
+            # drop, or a skeleton sits under the size-based strip threshold. Fail
+            # the build rather than ship it. (This gate is scoped to component
+            # serializations, not all low-level XML — small illustrative XML is
+            # permitted short context; see companion.RAW_COMPONENT_XML_MARKER.)
             if contains_raw_component_xml(chunk.get("content")):
                 errors.append(
                     f"chunk {i} ({chunk.get('id')!r}) companion chunk contains raw "

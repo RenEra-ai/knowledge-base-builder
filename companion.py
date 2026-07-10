@@ -51,15 +51,24 @@ _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 XML_STRIP_MIN_CHARS = 1500
 
 # The root element of a Boomi component serialization. Its presence in a chunk
-# means a canned <bns:Component> template reached the KB — the exact low-level
-# XML-building content the corpus is curated to exclude.
+# means a canned <bns:Component> template reached the KB.
 #
-# strip_xml_blocks() alone cannot enforce this: it is size-based, and several
-# component skeletons upstream are *under* XML_STRIP_MIN_CHARS (map_component's
-# examples are 516-699 chars). Those must be excluded by dropping their sections
-# in the allowlist. This marker is the fail-closed backstop for both paths, and
-# is deliberately narrower than a "<bns:" prefix test: small <bns:encryptedValues>
-# snippets are wanted content (encrypted-token handling).
+# This targets the <bns:Component> component definitions specifically — the
+# canned component templates the corpus never ingests — NOT every fragment of
+# low-level XML. Small illustrative XML is permitted as short context per the
+# ingestion plan ("Exclude large canned XML examples except where needed as
+# short context"): field snippets, a process-shape (<shape>/<dataprocess>)
+# naming example, and <bns:encryptedValues> token blocks are all wanted content.
+# Those are governed by strip_xml_blocks (which drops the oversized blocks) plus
+# per-file section drops — this marker is only the fail-closed backstop for the
+# component-serialization case that must never ship.
+#
+# strip_xml_blocks() alone cannot enforce even that narrow case: it is
+# size-based, and several component skeletons upstream are *under*
+# XML_STRIP_MIN_CHARS (map_component's examples are 516-699 chars), so they must
+# be excluded by dropping their sections in the allowlist. The marker is also
+# deliberately narrower than a "<bns:" prefix test, so the small
+# <bns:encryptedValues> snippets survive.
 RAW_COMPONENT_XML_MARKER = "<bns:Component"
 
 # Basenames that must never be fetched even if an allowlist names them.
