@@ -77,11 +77,14 @@ XML_STRIP_MIN_CHARS = 1500
 RAW_COMPONENT_XML_MARKER = "<bns:Component"
 
 # Default-namespaced component root: ``<Component …>`` (or any ``<prefix:Component>``)
-# carrying a serialization attribute. ``Component\b`` avoids matching
-# ``<ComponentReference>`` / ``<Components>``; the attribute requirement avoids a
-# bare prose "<Component>" and the wanted <bns:encryptedValues> snippet.
+# carrying a serialization attribute. The ``(?=[\s/>])`` lookahead requires the
+# element NAME to end at "Component" — so ``<ComponentReference>``, ``<Components>``,
+# and (since ``-``/``.`` are legal XML name chars that ``\b`` would treat as a
+# boundary) ``<Component-Reference>`` / ``<Component.Info>`` are NOT matched. The
+# attribute requirement further avoids a bare prose "<Component>" and the wanted
+# <bns:encryptedValues> snippet.
 _COMPONENT_ROOT_RE = re.compile(
-    r"<(?:[A-Za-z][\w.-]*:)?Component\b[^>]*\b(?:componentId|xmlns|type)\s*="
+    r"<(?:[A-Za-z][\w.-]*:)?Component(?=[\s/>])[^>]*\b(?:componentId|xmlns|type)\s*="
 )
 
 # Basenames that must never be fetched even if an allowlist names them.

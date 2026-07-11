@@ -255,6 +255,14 @@ def test_contains_raw_component_xml_ignores_bare_component_mention():
     assert not companion.contains_raw_component_xml('<ComponentReference id="x"/>')
 
 
+def test_contains_raw_component_xml_ignores_component_prefixed_element_names():
+    # `-` and `.` are legal XML name chars, so `<Component-Reference>` /
+    # `<Component.Info>` are distinct elements, not a `<Component>` root. The
+    # gate must not fail the build on these even when they carry a type= attr.
+    assert not companion.contains_raw_component_xml('<Component-Reference type="x">y</Component-Reference>')
+    assert not companion.contains_raw_component_xml('<Component.Info type="x"/>')
+
+
 def test_contains_raw_component_xml_handles_non_strings():
     assert not companion.contains_raw_component_xml(None)
     assert not companion.contains_raw_component_xml(123)
