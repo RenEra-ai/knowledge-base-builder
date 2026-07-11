@@ -270,6 +270,18 @@ def test_contains_raw_component_xml_ignores_component_prefixed_element_names():
     assert not companion.contains_raw_component_xml('<bns:Components type="x"/>')
 
 
+def test_contains_raw_component_xml_requires_real_root_attribute():
+    # The default-ns arm must match a real, whitespace-separated attribute — not
+    # "type" embedded in a hyphenated name, nor an attr= appearing inside a
+    # quoted value. Either would spuriously fail the build.
+    assert not companion.contains_raw_component_xml('<Component data-type="widget"/>')
+    assert not companion.contains_raw_component_xml('<Component name="a type=b"/>')
+    assert not companion.contains_raw_component_xml('<Component name="x componentId=y"/>')
+    # A genuine whitespace-separated attribute still trips it.
+    assert companion.contains_raw_component_xml('<Component type="map">x</Component>')
+    assert companion.contains_raw_component_xml('<Component\n  componentId="abc">')
+
+
 def test_contains_raw_component_xml_handles_non_strings():
     assert not companion.contains_raw_component_xml(None)
     assert not companion.contains_raw_component_xml(123)

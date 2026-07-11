@@ -80,9 +80,15 @@ XML_STRIP_MIN_CHARS = 1500
 # and several component skeletons upstream are *under* XML_STRIP_MIN_CHARS
 # (map_component's examples are 516-699 chars), so they must also be excluded by
 # dropping their sections in the allowlist.
+# The default-ns arm requires a real root attribute: ``\s`` forces the attribute
+# name to be whitespace-separated (so ``data-type=`` does not match via a bare word
+# boundary), and ``[^>"]*`` stops the scan at the first attribute-value quote (so a
+# ``type=`` / ``componentId=`` appearing INSIDE a quoted value is not mistaken for a
+# root attribute). The namespaced arm needs no attribute — a ``<prefix:Component>``
+# element is a serialization on its own.
 _COMPONENT_ROOT_RE = re.compile(
-    r"<[A-Za-z][\w.-]*:Component(?=[\s/>])"                      # namespaced root
-    r"|<Component(?=[\s/>])[^>]*\b(?:componentId|xmlns|type)\s*="  # default-ns root w/ attr
+    r'<[A-Za-z][\w.-]*:Component(?=[\s/>])'                          # namespaced root
+    r'|<Component(?=[\s/>])[^>"]*\s(?:componentId|xmlns|type)\s*='   # default-ns root w/ real attr
 )
 
 # Basenames that must never be fetched even if an allowlist names them.
