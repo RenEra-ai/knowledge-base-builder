@@ -123,7 +123,7 @@ def validate_chunks(chunks):
             # drop, or a skeleton sits under the size-based strip threshold. Fail
             # the build rather than ship it. (This gate is scoped to component
             # serializations, not all low-level XML — small illustrative XML is
-            # permitted short context; see companion.RAW_COMPONENT_XML_MARKER.)
+            # permitted short context; see companion.contains_raw_component_xml.)
             if contains_raw_component_xml(chunk.get("content")):
                 errors.append(
                     f"chunk {i} ({chunk.get('id')!r}) companion chunk contains raw "

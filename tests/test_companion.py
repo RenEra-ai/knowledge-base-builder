@@ -226,6 +226,8 @@ def test_contains_raw_component_xml_detects_component_root():
     assert companion.contains_raw_component_xml('<bns:Component type="map">')
     # Size-independent: the sub-threshold skeletons strip_xml_blocks keeps.
     assert companion.contains_raw_component_xml("a\n```xml\n<bns:Component/>\n```\n")
+    # A namespaced Component root is a serialization even with no attributes.
+    assert companion.contains_raw_component_xml("<bns:Component>\n  <field/>\n</bns:Component>")
 
 
 def test_contains_raw_component_xml_ignores_wanted_bns_snippets():
@@ -261,6 +263,11 @@ def test_contains_raw_component_xml_ignores_component_prefixed_element_names():
     # gate must not fail the build on these even when they carry a type= attr.
     assert not companion.contains_raw_component_xml('<Component-Reference type="x">y</Component-Reference>')
     assert not companion.contains_raw_component_xml('<Component.Info type="x"/>')
+    # Same boundary rule for the NAMESPACED form: an element whose name merely
+    # begins with "Component" is not a <bns:Component> root.
+    assert not companion.contains_raw_component_xml('<bns:ComponentReference type="x">y</bns:ComponentReference>')
+    assert not companion.contains_raw_component_xml('<bns:Component-Reference type="x"/>')
+    assert not companion.contains_raw_component_xml('<bns:Components type="x"/>')
 
 
 def test_contains_raw_component_xml_handles_non_strings():
