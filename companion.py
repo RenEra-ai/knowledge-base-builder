@@ -88,7 +88,10 @@ XML_STRIP_MIN_CHARS = 1500
 # after quoted values are blanked out. This is attribute-order-independent and
 # cannot be fooled by a componentId=/type= appearing INSIDE a value, by a
 # single-quoted value, or by a hyphenated name such as data-type.
-_NAMESPACED_COMPONENT_RE = re.compile(r"""<[A-Za-z][\w.-]*:Component(?=[\s/>])""")
+# The prefix starts with an XML NameStartChar — a letter or ``_`` (``[\w.-]``
+# then allows the digits/``.``/``-`` that are legal later in a name), so an
+# underscore-prefixed namespace like ``<_bns:Component …>`` is still caught.
+_NAMESPACED_COMPONENT_RE = re.compile(r"""<[A-Za-z_][\w.-]*:Component(?=[\s/>])""")
 _DEFAULT_COMPONENT_TAG_RE = re.compile(r"""<Component(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)""")
 _QUOTED_VALUE_RE = re.compile(r"""("[^"]*"|'[^']*')""")
 _ROOT_ATTR_RE = re.compile(r"""(?:^|\s)(?:componentId|xmlns|type)\s*=""")

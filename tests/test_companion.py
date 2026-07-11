@@ -239,6 +239,13 @@ def test_contains_raw_component_xml_ignores_wanted_bns_snippets():
     assert not companion.contains_raw_component_xml("the bns:Component root element")
 
 
+def test_contains_raw_component_xml_detects_underscore_prefixed_namespace():
+    # `_` is a valid XML NameStartChar, so an underscore-prefixed namespace is a
+    # real serialization the fail-closed gate must catch.
+    assert companion.contains_raw_component_xml("<_bns:Component xmlns:_bns='x' type='map'/>")
+    assert companion.contains_raw_component_xml("<_ns:Component>\n  <field/>\n</_ns:Component>")
+
+
 def test_contains_raw_component_xml_detects_default_namespace_root():
     # Boomi also serializes a component root without the bns: prefix, as a
     # default-namespaced <Component …> carrying componentId/name/type. The gate
