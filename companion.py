@@ -80,16 +80,18 @@ XML_STRIP_MIN_CHARS = 1500
 # and several component skeletons upstream are *under* XML_STRIP_MIN_CHARS
 # (map_component's examples are 516-699 chars), so they must also be excluded by
 # dropping their sections in the allowlist.
-# The default-ns arm requires a real root attribute: ``\s`` forces the attribute
-# name to be whitespace-separated (so ``data-type=`` does not match via a bare word
-# boundary), and ``[^>"]*`` stops the scan at the first attribute-value quote (so a
-# ``type=`` / ``componentId=`` appearing INSIDE a quoted value is not mistaken for a
-# root attribute). The namespaced arm needs no attribute — a ``<prefix:Component>``
-# element is a serialization on its own.
-_COMPONENT_ROOT_RE = re.compile(
-    r'<[A-Za-z][\w.-]*:Component(?=[\s/>])'                          # namespaced root
-    r'|<Component(?=[\s/>])[^>"]*\s(?:componentId|xmlns|type)\s*='   # default-ns root w/ real attr
-)
+#
+# The default-namespaced check PARSES the opening tag rather than substring-
+# matching: _DEFAULT_COMPONENT_TAG_RE captures the attribute region, consuming
+# whole quoted values of either style (so a '>' inside a value does not end the
+# tag early), and _ROOT_ATTR_RE then looks for a component-root attribute NAME
+# after quoted values are blanked out. This is attribute-order-independent and
+# cannot be fooled by a componentId=/type= appearing INSIDE a value, by a
+# single-quoted value, or by a hyphenated name such as data-type.
+_NAMESPACED_COMPONENT_RE = re.compile(r"""<[A-Za-z][\w.-]*:Component(?=[\s/>])""")
+_DEFAULT_COMPONENT_TAG_RE = re.compile(r"""<Component(?=[\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)""")
+_QUOTED_VALUE_RE = re.compile(r"""("[^"]*"|'[^']*')""")
+_ROOT_ATTR_RE = re.compile(r"""(?:^|\s)(?:componentId|xmlns|type)\s*=""")
 
 # Basenames that must never be fetched even if an allowlist names them.
 _DENIED_BASENAMES = {"readme.md", "claude.md", "boomi_error_reference.md"}
@@ -345,4 +347,12 @@ def contains_raw_component_xml(text):
     """
     if not isinstance(text, str):
         return False
-    return _COMPONENT_ROOT_RE.search(text) is not None
+    if _NAMESPACED_COMPONENT_RE.search(text):
+        return True
+    # Default-namespaced <Component …>: inspect real attribute names only,
+    # blanking quoted values first so an attr= embedded in a value (or a
+    # hyphenated name like data-type) does not spuriously match.
+    for attrs in _DEFAULT_COMPONENT_TAG_RE.findall(text):
+        if _ROOT_ATTR_RE.search(_QUOTED_VALUE_RE.sub(" ", attrs)):
+            return True
+    return False

@@ -271,15 +271,25 @@ def test_contains_raw_component_xml_ignores_component_prefixed_element_names():
 
 
 def test_contains_raw_component_xml_requires_real_root_attribute():
-    # The default-ns arm must match a real, whitespace-separated attribute — not
-    # "type" embedded in a hyphenated name, nor an attr= appearing inside a
-    # quoted value. Either would spuriously fail the build.
+    # The default-ns arm must match a real attribute name — not "type" embedded in
+    # a hyphenated name, nor an attr= appearing inside a quoted value (either quote
+    # style). Any of these would spuriously fail the build.
     assert not companion.contains_raw_component_xml('<Component data-type="widget"/>')
     assert not companion.contains_raw_component_xml('<Component name="a type=b"/>')
+    assert not companion.contains_raw_component_xml("<Component name='a type=b'/>")
     assert not companion.contains_raw_component_xml('<Component name="x componentId=y"/>')
-    # A genuine whitespace-separated attribute still trips it.
+    # A genuine attribute still trips it.
     assert companion.contains_raw_component_xml('<Component type="map">x</Component>')
     assert companion.contains_raw_component_xml('<Component\n  componentId="abc">')
+
+
+def test_contains_raw_component_xml_is_attribute_order_and_quote_agnostic():
+    # A root attribute anywhere in the tag counts, even after a leading quoted
+    # attribute — otherwise a real template would LEAK past the gate. Both single-
+    # and double-quoted attribute values are handled.
+    assert companion.contains_raw_component_xml('<Component name="Op" type="database">x</Component>')
+    assert companion.contains_raw_component_xml("<Component name='Op' componentId='x'>")
+    assert companion.contains_raw_component_xml('<Component  name="a"   type="b">')
 
 
 def test_contains_raw_component_xml_handles_non_strings():
