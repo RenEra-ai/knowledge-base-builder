@@ -8,13 +8,14 @@
   "raw_url_template": "https://raw.githubusercontent.com/OfficialBoomi/boomi-integration/{commit}/{path}",
   "blob_url_template": "https://github.com/OfficialBoomi/boomi-integration/blob/{commit}/{path}",
   "latest_blob_url_template": "https://github.com/OfficialBoomi/boomi-integration/blob/main/{path}",
+  "curation_policy": "Every file carries a positive `sections` allowlist derived from the ingestion plan's per-file section_scope (docs/plans/companion-supplemental-kb-ingestion-plan.json). Curation is fail-closed: a section upstream adds tomorrow does not enter the KB unless a pattern already names it. `drop_sections` is a second gate applied after the allowlist, retained for the sections that are pure <bns:Component> serializations (they are under XML_STRIP_MIN_CHARS, so the size-based strip cannot catch them) and for the plan's one explicitly-excluded claim. Note: an allowlist keeps XML-dense sections on purpose — the REST field-id vocabulary and the EDI tagList attribute reference are the corpus's highest-value content and the plan scopes them in. Density is not a curation criterion; plan fidelity is.",
   "files": [
     {
       "path": "references/components/map_component.md",
       "priority": 1,
       "area": "Components",
       "title": "Map Component",
-      "sections": null,
+      "sections": ["purpose", "profile dependency", "mapping approach", "map generation rules", "mapping patterns", "instance identifier and qualifier mappings", "key management"],
       "drop_sections": ["component structure", "complete examples"],
       "strip_xml_blocks": true
     },
@@ -23,7 +24,7 @@
       "priority": 1,
       "area": "Components",
       "title": "Map Component Functions",
-      "sections": null,
+      "sections": ["function architecture", "custom scripting", "dynamic process property", "document property", "key observations"],
       "drop_sections": ["complete working example"],
       "strip_xml_blocks": true
     },
@@ -32,7 +33,7 @@
       "priority": 2,
       "area": "Components",
       "title": "EDI Profile Component",
-      "sections": ["instance identifier", "taglist", "qualifier"],
+      "sections": ["instance identifiers", "qualifier", "taglists", "key numbering", "single-segment loops"],
       "drop_sections": null,
       "strip_xml_blocks": true
     },
@@ -41,7 +42,7 @@
       "priority": 1,
       "area": "Components",
       "title": "REST Connection Component",
-      "sections": null,
+      "sections": ["overview", "authentication patterns", "required fields", "url configuration", "timeout configuration", "connection pooling", "relationship with operation"],
       "drop_sections": ["component structure"],
       "strip_xml_blocks": true
     },
@@ -50,7 +51,7 @@
       "priority": 1,
       "area": "Components",
       "title": "REST Connector Operation Component",
-      "sections": null,
+      "sections": ["authentication headers", "path configuration", "query parameters", "common header patterns", "dynamic value replacement"],
       "drop_sections": ["component structure", "complete examples", "redirect configuration", "operation naming conventions"],
       "strip_xml_blocks": true
     },
@@ -59,8 +60,8 @@
       "priority": 3,
       "area": "Components",
       "title": "MCP Server Connection Component",
-      "sections": null,
-      "drop_sections": ["xml structure"],
+      "sections": ["overview", "configuration fields", "authentication", "notes"],
+      "drop_sections": ["xml structure", "conversation starters"],
       "strip_xml_blocks": true
     },
     {
@@ -68,7 +69,7 @@
       "priority": 3,
       "area": "Components",
       "title": "MCP Server Operation Component",
-      "sections": null,
+      "sections": ["critical requirements", "operation configuration", "tool definition fields", "json schema requirements", "special structures", "dependencies", "notes"],
       "drop_sections": ["xml structure"],
       "strip_xml_blocks": true
     },
@@ -77,7 +78,7 @@
       "priority": 1,
       "area": "Steps",
       "title": "REST Connector Step",
-      "sections": null,
+      "sections": ["dynamic properties", "key attributes", "workflow considerations"],
       "drop_sections": ["configuration structure", "required components", "reference xml examples", "document clearing for get requests"],
       "strip_xml_blocks": true
     },
@@ -86,7 +87,7 @@
       "priority": 3,
       "area": "Steps",
       "title": "MCP Server Start Step",
-      "sections": null,
+      "sections": ["key attributes", "xml structure", "process configuration", "typical process pattern", "response handling", "component dependencies"],
       "drop_sections": null,
       "strip_xml_blocks": true
     },
@@ -95,7 +96,7 @@
       "priority": 4,
       "area": "Steps",
       "title": "Data Process Groovy Step",
-      "sections": ["purpose", "development philosophy", "core groovy patterns", "working with properties", "critical rules and gotchas"],
+      "sections": ["purpose", "development philosophy", "mandatory datacontext loop", "working with properties", "critical rules and gotchas"],
       "drop_sections": null,
       "strip_xml_blocks": true
     },
@@ -113,7 +114,7 @@
       "priority": 3,
       "area": "Platform Entities",
       "title": "MCP Server",
-      "sections": null,
+      "sections": ["architecture", "url structure", "build order", "protocol details", "supported vs unsupported features", "profile/schema changes"],
       "drop_sections": null,
       "strip_xml_blocks": true
     }
