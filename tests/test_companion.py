@@ -192,6 +192,66 @@ def test_document_level_tech_preview_caveat_survives_the_allowlist():
     assert kept == ["MCP Server Reference", "Wanted"]
 
 
+def test_only_the_first_doc_level_caveat_bypasses_the_allowlist():
+    """"Exactly one caveat per document" is enforced, not assumed.
+
+    The upstream docs repeat the banner freely, so a SECOND top-level section carrying
+    it would otherwise smuggle its whole body past the allowlist.
+    """
+    secs = _secs(
+        (1, "MCP Server Reference", "> Technology Preview: not production ready"),
+        (2, "Wanted", "the curated topic"),
+        (1, "Appendix: Canned Examples", "> Technology Preview — and 400 lines of XML"),
+    )
+    kept = [s["heading"] for s in companion.filter_sections(secs, allow_patterns=["wanted"])]
+    assert kept == ["MCP Server Reference", "Wanted"]
+
+
+# --- curation_drift -----------------------------------------------------------
+
+def _cfg(**over):
+    base = {
+        "path": "references/components/map_component.md",
+        "area": "Components", "title": "Map Component", "priority": 1,
+        "sections": ["purpose"], "drop_sections": ["complete examples"],
+        "strip_xml_blocks": True,
+    }
+    base.update(over)
+    return base
+
+
+def test_curation_drift_is_silent_when_config_and_manifest_agree():
+    assert companion.curation_drift([_cfg()], [_cfg()]) == []
+
+
+def test_curation_drift_ignores_pattern_reordering():
+    # filter_sections applies the patterns with any(), so order carries no meaning —
+    # re-sorting an allowlist for readability must not demand a re-fetch.
+    cfg = _cfg(sections=["alpha", "beta"])
+    man = _cfg(sections=["beta", "alpha"])
+    assert companion.curation_drift([cfg], [man]) == []
+
+
+def test_curation_drift_catches_every_curator_owned_field():
+    # Not just the filters: chunk_markdown_file builds a chunk's title and breadcrumb
+    # from `title`/`area`, so a stale manifest mislabels every hit from that source.
+    for field, new in [
+        ("sections", ["purpose", "key management"]),
+        ("drop_sections", []),
+        ("strip_xml_blocks", False),
+        ("title", "Renamed"),
+        ("area", "Renamed Area"),
+        ("priority", 4),
+    ]:
+        drift = companion.curation_drift([_cfg(**{field: new})], [_cfg()])
+        assert len(drift) == 1 and field in drift[0], f"{field} drift went unreported"
+
+
+def test_curation_drift_reports_added_and_removed_sources():
+    assert "not in the manifest" in companion.curation_drift([_cfg()], [])[0]
+    assert "no longer in companion_sources.json" in companion.curation_drift([], [_cfg()])[0]
+
+
 # --- strip_xml_blocks ---------------------------------------------------------
 
 def test_strip_xml_blocks_removes_large_xml_fence():

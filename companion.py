@@ -282,8 +282,8 @@ def filter_sections(sections, allow_patterns=None, drop_sections=None):
       otherwise useful file.
     - A section whose body mentions "Tech Preview" is exempt from the *denylist*
       and from the "Contents" rule: once a section is curated in, its warning must
-      survive. It overrides ``allow_patterns`` only for the DOCUMENT-LEVEL section
-      (the preamble or the ``#`` title) — see below.
+      survive. It overrides ``allow_patterns`` only for the DOCUMENT-LEVEL caveat —
+      the FIRST warning-bearing preamble or ``#`` title — see below.
 
     The Tech-Preview exemption used to short-circuit ``allow_patterns`` for a section
     at any depth, which quietly defeated fail-closed curation: the four Tech-Preview
@@ -306,6 +306,7 @@ def filter_sections(sections, allow_patterns=None, drop_sections=None):
     """
     kept = []
     last_by_level = {}
+    doc_caveat_taken = False
     for sec in sections:
         level = sec["level"]
         heading = sec["heading"]
@@ -321,9 +322,15 @@ def filter_sections(sections, allow_patterns=None, drop_sections=None):
         if heading.strip().lower() == "contents" and not is_warning:
             continue
 
-        # The document's own Tech-Preview caveat (preamble / "#" title) always
-        # survives. Any deeper warning-bearing section is fail-closed like the rest.
-        is_doc_caveat = is_warning and level <= 1
+        # The document's own Tech-Preview caveat — the FIRST warning-bearing preamble
+        # or "#" title — always survives. Taking only the first is what makes "exactly
+        # one per document" an enforced invariant rather than an assumption: these docs
+        # repeat the banner freely, so a second top-level section carrying it would
+        # otherwise smuggle its whole body past the allowlist. Every other
+        # warning-bearing section is fail-closed like the rest.
+        is_doc_caveat = is_warning and level <= 1 and not doc_caveat_taken
+        if is_doc_caveat:
+            doc_caveat_taken = True
 
         if allow_patterns and not is_doc_caveat:
             if not _section_matches(heading, ancestors, allow_patterns):
@@ -356,30 +363,48 @@ def strip_xml_blocks(md_text, min_chars=XML_STRIP_MIN_CHARS):
     return _XML_FENCE_RE.sub(_replace, md_text)
 
 
-# The curation fields fetch_companion snapshots from companion_sources.json into
-# companion_manifest.json. They are curation *policy*, not fetch provenance, so a
-# manifest written before a policy edit silently chunks the corpus under the OLD
-# rules — the build reports success and the numbers look plausible.
-_CURATION_FIELDS = ("sections", "drop_sections", "strip_xml_blocks")
+# Every field fetch_companion.build_manifest_entry copies out of
+# companion_sources.json — i.e. everything in the manifest that came from the curator
+# rather than from the fetch itself (raw_url/sha256/bytes are fetch provenance and are
+# NOT listed here). chunk_docs reads all of these back from the MANIFEST, so a manifest
+# written before a config edit silently chunks the corpus under the old values while
+# the build reports success. `sections`/`drop_sections`/`strip_xml_blocks` decide what
+# is ingested; `title`/`area` decide how a hit is labelled (they build the chunk title
+# and breadcrumb); `priority` is carried for downstream ranking. All of them drift.
+#
+# The two pattern lists compare as SETS: filter_sections applies them with any(), so
+# their order carries no meaning and re-ordering one for readability must not demand a
+# re-fetch of all 12 upstream files.
+_ORDERED_CONFIG_FIELDS = ("area", "title", "priority", "strip_xml_blocks")
+_UNORDERED_CONFIG_FIELDS = ("sections", "drop_sections")
 
 
 def _curation_of(entry):
-    """The curation policy of one config/manifest file record, normalized."""
-    return {
-        "sections": tuple(entry.get("sections") or ()),
-        "drop_sections": tuple(entry.get("drop_sections") or ()),
+    """The config-derived policy of one config/manifest file record, normalized."""
+    policy = {
+        "area": entry.get("area", ""),
+        "title": entry.get("title", ""),
+        "priority": entry.get("priority"),
         "strip_xml_blocks": bool(entry.get("strip_xml_blocks", False)),
     }
+    for field in _UNORDERED_CONFIG_FIELDS:
+        policy[field] = frozenset(entry.get(field) or ())
+    return policy
+
+
+def _show(value):
+    """Render a policy value for a drift message (sets back to sorted lists)."""
+    return sorted(value) if isinstance(value, frozenset) else value
 
 
 def curation_drift(config_files, manifest_files):
-    """Describe every curation difference between config and manifest file records.
+    """Describe every config-vs-manifest difference in curator-owned fields.
 
     Returns a list of human-readable drift strings (empty when they agree). Callers
-    treat a non-empty result as fatal: chunking would apply a stale allowlist, which
-    fails open — the sections a curator just excluded stay in the corpus, and the
-    build says nothing. Editing companion_sources.json requires re-running
-    fetch_companion.py so the manifest carries the new policy.
+    treat a non-empty result as fatal: chunking would apply a stale policy, which fails
+    open — the sections a curator just excluded stay in the corpus, a renamed title
+    keeps its old label, and the build says nothing. Editing companion_sources.json
+    requires re-running fetch_companion.py so the manifest carries the new policy.
     """
     cfg = {e["path"]: e for e in config_files}
     man = {e["path"]: e for e in manifest_files}
@@ -390,12 +415,11 @@ def curation_drift(config_files, manifest_files):
         drift.append(f"{path}: in the manifest but no longer in companion_sources.json")
     for path in sorted(set(cfg) & set(man)):
         want, have = _curation_of(cfg[path]), _curation_of(man[path])
-        for field in _CURATION_FIELDS:
+        for field in _ORDERED_CONFIG_FIELDS + _UNORDERED_CONFIG_FIELDS:
             if want[field] != have[field]:
                 drift.append(
-                    f"{path}: {field} is {list(have[field]) if isinstance(have[field], tuple) else have[field]!r} "
-                    f"in the manifest but {list(want[field]) if isinstance(want[field], tuple) else want[field]!r} "
-                    f"in companion_sources.json"
+                    f"{path}: {field} is {_show(have[field])!r} in the manifest "
+                    f"but {_show(want[field])!r} in companion_sources.json"
                 )
     return drift
 
