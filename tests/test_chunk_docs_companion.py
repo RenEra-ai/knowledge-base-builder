@@ -10,6 +10,7 @@ from chunk_docs import (
     chunk_markdown_file,
     process_companion,
 )
+from companion import sha256_hex
 
 UPSTREAM = {"repo": "OfficialBoomi/boomi-integration", "commit": "d" * 40}
 
@@ -19,6 +20,10 @@ def _entry(**overrides):
         "path": "references/components/map_component.md",
         "area": "Components",
         "title": "Map Component",
+        # process_companion requires a sha256 on every entry (a manifest must not be
+        # able to disable its own integrity check), and verifies it against the staged
+        # file. MD is what the tests below stage.
+        "sha256": sha256_hex(MD),
         "raw_url": "https://raw.githubusercontent.com/OfficialBoomi/boomi-integration/" + "d" * 40 + "/references/components/map_component.md",
         "blob_url": "https://github.com/OfficialBoomi/boomi-integration/blob/" + "d" * 40 + "/references/components/map_component.md",
         "latest_url": "https://github.com/OfficialBoomi/boomi-integration/blob/main/references/components/map_component.md",
@@ -187,16 +192,12 @@ def test_process_companion_fails_when_a_staged_file_does_not_match_its_sha256(tm
     chunking a modified or partially-fetched staged copy would ship content asserting a
     provenance it does not have.
     """
-    from companion import sha256_hex
-
     staging = tmp_path / "staging"
     (staging / "references/components").mkdir(parents=True)
     md = staging / "references/components/map_component.md"
     md.write_text(MD, encoding="utf-8")
 
-    entry = _entry()
-    entry["sha256"] = sha256_hex(MD)
-    manifest = {"repo": "R", "commit": "d" * 40, "files": [entry]}
+    manifest = {"repo": "R", "commit": "d" * 40, "files": [_entry()]}
     mpath = tmp_path / "companion_manifest.json"
     mpath.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -206,6 +207,22 @@ def test_process_companion_fails_when_a_staged_file_does_not_match_its_sha256(tm
     # A hand-edit, or a truncated file from an interrupted re-fetch.
     md.write_text(MD + "\n## Purpose\nnever fetched from upstream\n", encoding="utf-8")
     with pytest.raises(ValueError, match="does not match the manifest"):
+        process_companion(str(mpath), str(staging), 0, 100_000)
+
+
+def test_process_companion_rejects_a_manifest_entry_with_no_sha256(tmp_path):
+    """A manifest must not be able to switch off its own integrity check."""
+    staging = tmp_path / "staging"
+    (staging / "references/components").mkdir(parents=True)
+    (staging / "references/components/map_component.md").write_text(MD, encoding="utf-8")
+
+    entry = _entry()
+    del entry["sha256"]
+    mpath = tmp_path / "companion_manifest.json"
+    mpath.write_text(
+        json.dumps({"repo": "R", "commit": "d" * 40, "files": [entry]}), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="no sha256"):
         process_companion(str(mpath), str(staging), 0, 100_000)
 
 

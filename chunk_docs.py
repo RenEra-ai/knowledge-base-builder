@@ -428,8 +428,13 @@ def _markdown_title(sections):
     return ""
 
 
-def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbose=False):
+def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbose=False,
+                        text=None):
     """Chunk one companion Markdown file into provenance-tagged chunk dicts.
+
+    ``text``, when given, is the file's already-read content — process_companion passes
+    the exact string it hashed against the manifest, so the verified bytes are the ones
+    ingested. Falls back to reading ``md_path``.
 
     Reuses the HTML path's merge/oversize-split machinery (merge_small_chunks,
     split_html_on_paragraphs, estimate_tokens, the empty-content drop) while
@@ -440,8 +445,10 @@ def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbos
     """
     import markdown  # lazy: the HTML path must stay importable without markdown
 
-    with open(md_path, "r", encoding="utf-8") as f:
-        md = f.read()
+    if text is None:
+        with open(md_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    md = text
 
     repo = upstream.get("repo", "").strip("/")
     page_key = "companion://{}/{}".format(repo, entry["path"])
@@ -607,22 +614,36 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
         # raw_url, so content that is not what was fetched would ship asserting a
         # provenance it does not have. A truncated file from an interrupted re-fetch
         # reaches here the same way a hand-edit does.
+        #
+        # sha256 is REQUIRED, not checked-if-present: fetch_companion always writes it,
+        # so a missing hash means the manifest did not come from a real fetch. Treating
+        # it as optional would let the artifact being verified turn its own verification
+        # off by dropping one key.
         expected_sha = entry.get("sha256")
-        if expected_sha:
-            with open(md_path, "r", encoding="utf-8") as f:
-                staged_text = f.read()
-            actual_sha = sha256_hex(staged_text)
-            if actual_sha != expected_sha:
-                raise ValueError(
-                    f"Staged companion file does not match the manifest: {path}\n"
-                    f"  manifest sha256: {expected_sha}\n"
-                    f"  staged sha256:   {actual_sha}\n"
-                    "The staged copy was modified or only partially fetched. Chunking "
-                    "it would stamp content that was never fetched with the pinned "
-                    "upstream commit and raw_url. Re-run fetch_companion.py."
-                )
+        if not expected_sha:
+            raise ValueError(
+                f"Companion manifest entry has no sha256: {path}. Every entry "
+                "fetch_companion writes carries one; without it the staged content "
+                "cannot be verified against what was fetched. Re-run fetch_companion.py."
+            )
+        with open(md_path, "r", encoding="utf-8") as f:
+            staged_text = f.read()
+        actual_sha = sha256_hex(staged_text)
+        if actual_sha != expected_sha:
+            raise ValueError(
+                f"Staged companion file does not match the manifest: {path}\n"
+                f"  manifest sha256: {expected_sha}\n"
+                f"  staged sha256:   {actual_sha}\n"
+                "The staged copy was modified or only partially fetched. Chunking "
+                "it would stamp content that was never fetched with the pinned "
+                "upstream commit and raw_url. Re-run fetch_companion.py."
+            )
+        # Chunk the exact text we just hashed rather than re-reading md_path, so the
+        # verified bytes ARE the ingested bytes — no window for the file to change
+        # between the check and the read.
         file_chunks = chunk_markdown_file(
-            md_path, entry, upstream, min_tokens, max_tokens, verbose
+            md_path, entry, upstream, min_tokens, max_tokens, verbose,
+            text=staged_text,
         )
         if not file_chunks:
             print(f"  WARNING: companion file produced no chunks: {entry['path']}")
