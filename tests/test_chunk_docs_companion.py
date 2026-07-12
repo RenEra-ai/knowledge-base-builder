@@ -180,6 +180,35 @@ def test_process_companion_reads_staging_and_fails_on_missing(tmp_path):
         process_companion(str(mpath), str(staging), 0, 100_000)
 
 
+def test_process_companion_fails_when_a_staged_file_does_not_match_its_sha256(tmp_path):
+    """Content that is not what was fetched must never be stamped with the pinned commit.
+
+    Every companion chunk carries upstream_commit and the raw_url of the source file, so
+    chunking a modified or partially-fetched staged copy would ship content asserting a
+    provenance it does not have.
+    """
+    from companion import sha256_hex
+
+    staging = tmp_path / "staging"
+    (staging / "references/components").mkdir(parents=True)
+    md = staging / "references/components/map_component.md"
+    md.write_text(MD, encoding="utf-8")
+
+    entry = _entry()
+    entry["sha256"] = sha256_hex(MD)
+    manifest = {"repo": "R", "commit": "d" * 40, "files": [entry]}
+    mpath = tmp_path / "companion_manifest.json"
+    mpath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # Untampered: the hash agrees and the build proceeds.
+    assert process_companion(str(mpath), str(staging), 0, 100_000)
+
+    # A hand-edit, or a truncated file from an interrupted re-fetch.
+    md.write_text(MD + "\n## Purpose\nnever fetched from upstream\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match the manifest"):
+        process_companion(str(mpath), str(staging), 0, 100_000)
+
+
 def test_process_companion_fails_on_stale_curation_policy(tmp_path):
     """Editing companion_sources.json without re-fetching must not build silently.
 

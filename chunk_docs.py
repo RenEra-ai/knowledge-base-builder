@@ -28,6 +28,7 @@ from companion import (
     curation_drift,
     filter_sections,
     is_denied_path,
+    sha256_hex,
     split_markdown_sections,
     strip_xml_blocks,
 )
@@ -548,7 +549,13 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
     """Load a companion manifest and chunk every staged Markdown file it lists.
 
     Fails if the manifest or a staged file is missing (every companion source is
-    mandatory); warns if an allowlisted file yields no chunks.
+    mandatory), or if a staged file's content does not hash to the sha256 the manifest
+    recorded for it; warns if an allowlisted file yields no chunks.
+
+    Both checks exist because every companion chunk is stamped with the pinned upstream
+    commit and raw_url. Anything that reaches chunking must therefore be exactly what
+    was fetched from that commit — otherwise a chunk ships asserting a provenance it
+    does not have.
 
     The section allow/deny filters are read from the MANIFEST, which fetch_companion
     snapshotted from companion_sources.json at fetch time. When ``config_path`` is
@@ -595,6 +602,25 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
         md_path = os.path.join(staging_dir, path)
         if not os.path.isfile(md_path):
             raise FileNotFoundError(f"Staged companion file missing: {md_path}")
+        # The manifest records the sha256 fetch_companion saw. Verify it: every chunk
+        # from this file is about to be stamped with the pinned upstream commit and
+        # raw_url, so content that is not what was fetched would ship asserting a
+        # provenance it does not have. A truncated file from an interrupted re-fetch
+        # reaches here the same way a hand-edit does.
+        expected_sha = entry.get("sha256")
+        if expected_sha:
+            with open(md_path, "r", encoding="utf-8") as f:
+                staged_text = f.read()
+            actual_sha = sha256_hex(staged_text)
+            if actual_sha != expected_sha:
+                raise ValueError(
+                    f"Staged companion file does not match the manifest: {path}\n"
+                    f"  manifest sha256: {expected_sha}\n"
+                    f"  staged sha256:   {actual_sha}\n"
+                    "The staged copy was modified or only partially fetched. Chunking "
+                    "it would stamp content that was never fetched with the pinned "
+                    "upstream commit and raw_url. Re-run fetch_companion.py."
+                )
         file_chunks = chunk_markdown_file(
             md_path, entry, upstream, min_tokens, max_tokens, verbose
         )
