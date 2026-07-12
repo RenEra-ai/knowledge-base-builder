@@ -95,7 +95,15 @@ Options:
 - `--max-tokens N` — maximum chunk size in tokens (default: `1200`)
 - `--companion-input DIR` — staged companion Markdown directory (default: `companion_sources/`)
 - `--companion-manifest FILE` — `companion_manifest.json` from step 2b; **enables** the supplemental corpus when provided (Markdown chunks are appended with stable `companion://…` page keys and provenance metadata)
+- `--companion-config FILE` — `companion_sources.json` to check the manifest against (default: `companion_sources.json`; pass `''` to skip)
 - `--verbose` — print each chunk as it is created
+
+The companion path is **fail-closed on stale inputs**, because every companion chunk is stamped with the pinned upstream commit and `raw_url` — anything chunked must be exactly what was fetched from that commit, or the chunk asserts a provenance it does not have. The build aborts if:
+
+- the manifest's curation policy has drifted from `companion_sources.json` (you edited the allowlist, a title, or the pinned commit and did not re-run `fetch_companion.py`) — otherwise the edit silently no-ops and the corpus is rebuilt under the old rules;
+- a staged file's content does not hash to the SHA-256 the manifest recorded for it (a hand-edit, or a truncated file from an interrupted fetch).
+
+Editing `companion_sources.json` therefore always means re-running `fetch_companion.py` before `chunk_docs.py`.
 
 ### 4. Build the semantic index
 
