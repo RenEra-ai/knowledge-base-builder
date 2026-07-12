@@ -561,18 +561,19 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
 
     if config_path:
         if not os.path.isfile(config_path):
-            # The default is relative, so this fires whenever cwd is not the repo
+            # The CLI default is relative, so this fires whenever cwd is not the repo
             # root. Say so, rather than surfacing a bare errno for a check the caller
-            # never asked for.
+            # never asked for. Name the parameter, not main()'s flag — a direct caller
+            # has a config_path argument and no flags.
             raise FileNotFoundError(
                 f"Companion config not found: {config_path!r} (cwd: {os.getcwd()}). "
                 "It is needed to verify the manifest's curation policy is current. "
-                "Pass --companion-config with the path to companion_sources.json, or "
-                "--companion-config '' to skip the check."
+                "Point config_path at companion_sources.json, or pass config_path=None "
+                "to skip the check."
             )
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
-        drift = curation_drift(config.get("files", []), manifest.get("files", []))
+        drift = curation_drift(config, manifest)
         if drift:
             raise ValueError(
                 "Companion curation policy has drifted from the manifest — the "

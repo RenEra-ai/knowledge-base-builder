@@ -378,6 +378,16 @@ def strip_xml_blocks(md_text, min_chars=XML_STRIP_MIN_CHARS):
 _ORDERED_CONFIG_FIELDS = ("area", "title", "priority", "strip_xml_blocks")
 _UNORDERED_CONFIG_FIELDS = ("sections", "drop_sections")
 
+# The TOP-LEVEL fields build_manifest copies from the config. `commit` matters most:
+# process_companion reads upstream repo/commit back from the manifest, so bumping the
+# pin without re-fetching rebuilds the corpus at the OLD commit and stamps every chunk
+# with it — silently undoing the upgrade. That is exactly the drift is_pinned_commit
+# exists to make impossible, so it has to be caught here too, not just per file.
+_TOPLEVEL_CONFIG_FIELDS = (
+    "repo", "repo_url", "commit", "license", "source_type", "verification_status",
+    "raw_url_template", "blob_url_template", "latest_blob_url_template",
+)
+
 
 def _curation_of(entry):
     """The config-derived policy of one config/manifest file record, normalized."""
@@ -397,18 +407,32 @@ def _show(value):
     return sorted(value) if isinstance(value, frozenset) else value
 
 
-def curation_drift(config_files, manifest_files):
+def curation_drift(config, manifest):
     """Describe every config-vs-manifest difference in curator-owned fields.
+
+    Takes the whole ``companion_sources.json`` and ``companion_manifest.json`` dicts —
+    drift lives at BOTH levels: the pinned commit sits at the top, the section filters
+    sit per file, and chunking reads both back from the manifest.
 
     Returns a list of human-readable drift strings (empty when they agree). Callers
     treat a non-empty result as fatal: chunking would apply a stale policy, which fails
-    open — the sections a curator just excluded stay in the corpus, a renamed title
-    keeps its old label, and the build says nothing. Editing companion_sources.json
-    requires re-running fetch_companion.py so the manifest carries the new policy.
+    open — the corpus is rebuilt at the previous commit, the sections a curator just
+    excluded stay in, a renamed title keeps its old label, and the build says nothing.
+    Editing companion_sources.json requires re-running fetch_companion.py so the
+    manifest carries the new policy.
     """
-    cfg = {e["path"]: e for e in config_files}
-    man = {e["path"]: e for e in manifest_files}
     drift = []
+    for field in _TOPLEVEL_CONFIG_FIELDS:
+        if field not in config:
+            continue  # optional in the config; fetch_companion defaults it
+        if config[field] != manifest.get(field):
+            drift.append(
+                f"{field} is {manifest.get(field)!r} in the manifest "
+                f"but {config[field]!r} in companion_sources.json"
+            )
+
+    cfg = {e["path"]: e for e in config.get("files", [])}
+    man = {e["path"]: e for e in manifest.get("files", [])}
     for path in sorted(set(cfg) - set(man)):
         drift.append(f"{path}: in companion_sources.json but not in the manifest")
     for path in sorted(set(man) - set(cfg)):

@@ -220,16 +220,40 @@ def _cfg(**over):
     return base
 
 
+def _doc(files=None, **over):
+    """A companion_sources.json / companion_manifest.json pair shape."""
+    base = {
+        "repo": "OfficialBoomi/boomi-integration",
+        "commit": "a" * 40,
+        "raw_url_template": "https://raw.githubusercontent.com/o/r/{commit}/{path}",
+        "files": [_cfg()] if files is None else files,
+    }
+    base.update(over)
+    return base
+
+
 def test_curation_drift_is_silent_when_config_and_manifest_agree():
-    assert companion.curation_drift([_cfg()], [_cfg()]) == []
+    assert companion.curation_drift(_doc(), _doc()) == []
 
 
 def test_curation_drift_ignores_pattern_reordering():
     # filter_sections applies the patterns with any(), so order carries no meaning —
     # re-sorting an allowlist for readability must not demand a re-fetch.
-    cfg = _cfg(sections=["alpha", "beta"])
-    man = _cfg(sections=["beta", "alpha"])
-    assert companion.curation_drift([cfg], [man]) == []
+    cfg = _doc(files=[_cfg(sections=["alpha", "beta"])])
+    man = _doc(files=[_cfg(sections=["beta", "alpha"])])
+    assert companion.curation_drift(cfg, man) == []
+
+
+def test_curation_drift_catches_a_commit_bump_that_was_never_refetched():
+    """The pin is the whole point: a bumped commit must never silently no-op.
+
+    process_companion reads upstream repo/commit back from the MANIFEST, so without
+    this the corpus is rebuilt at the previous commit and every chunk is stamped with
+    it, while the curator believes the sources were upgraded.
+    """
+    drift = companion.curation_drift(_doc(commit="b" * 40), _doc())
+    assert len(drift) == 1 and "commit" in drift[0]
+    assert "b" * 40 in drift[0] and "a" * 40 in drift[0]
 
 
 def test_curation_drift_catches_every_curator_owned_field():
@@ -243,13 +267,23 @@ def test_curation_drift_catches_every_curator_owned_field():
         ("area", "Renamed Area"),
         ("priority", 4),
     ]:
-        drift = companion.curation_drift([_cfg(**{field: new})], [_cfg()])
+        drift = companion.curation_drift(_doc(files=[_cfg(**{field: new})]), _doc())
+        assert len(drift) == 1 and field in drift[0], f"{field} drift went unreported"
+
+    # ...and the top-level provenance fields, not just the per-file ones.
+    for field, new in [
+        ("repo", "someone/else"),
+        ("raw_url_template", "https://evil.example/{commit}/{path}"),
+    ]:
+        drift = companion.curation_drift(_doc(**{field: new}), _doc())
         assert len(drift) == 1 and field in drift[0], f"{field} drift went unreported"
 
 
 def test_curation_drift_reports_added_and_removed_sources():
-    assert "not in the manifest" in companion.curation_drift([_cfg()], [])[0]
-    assert "no longer in companion_sources.json" in companion.curation_drift([], [_cfg()])[0]
+    assert "not in the manifest" in companion.curation_drift(_doc(), _doc(files=[]))[0]
+    assert "no longer in companion_sources.json" in companion.curation_drift(
+        _doc(files=[]), _doc()
+    )[0]
 
 
 # --- strip_xml_blocks ---------------------------------------------------------
