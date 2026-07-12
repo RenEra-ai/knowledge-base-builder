@@ -280,8 +280,25 @@ def filter_sections(sections, allow_patterns=None, drop_sections=None):
     - ``drop_sections`` (denylist): drop a section if its own or an ancestor
       heading matches — used to remove XML-scaffolding sections from an
       otherwise useful file.
-    - A section whose body mentions "Tech Preview" is never dropped (its warning
-      must survive), regardless of the filters.
+    - A section whose body mentions "Tech Preview" is exempt from the *denylist*
+      and from the "Contents" rule: once a section is curated in, its warning must
+      survive. It overrides ``allow_patterns`` only for the DOCUMENT-LEVEL section
+      (the preamble or the ``#`` title) — see below.
+
+    The Tech-Preview exemption used to short-circuit ``allow_patterns`` for a section
+    at any depth, which quietly defeated fail-closed curation: the four Tech-Preview
+    ``mcp_*`` upstream docs repeat the banner throughout, so any section of theirs was
+    admitted whether or not a curator had named it (a "Changelog" and a "Known
+    Limitations" rode in that way, and the next canned-XML section upstream adds would
+    have too). Restricting the override to level <= 1 keeps the one thing the rule
+    exists for — a document's own Tech-Preview caveat, of which there is exactly one,
+    carried by its title section — while a deeper section that merely mentions the
+    phrase must now be named by an allow pattern like any other content.
+
+    Note the doc-level caveat CANNOT be readmitted by naming the ``#`` title in
+    ``allow_patterns``: the title is an ancestor of every section in the file, so an
+    allow pattern matching it would match everything and silently ingest the whole
+    document. Hence the level-scoped override rather than a config-level fix.
 
     ancestry: a section at level L inherits the most recent headings at each
     shallower level as ancestors, so filtering an ``##`` also carries its
@@ -304,14 +321,14 @@ def filter_sections(sections, allow_patterns=None, drop_sections=None):
         if heading.strip().lower() == "contents" and not is_warning:
             continue
 
-        if is_warning:
-            kept.append(sec)
-            continue
+        # The document's own Tech-Preview caveat (preamble / "#" title) always
+        # survives. Any deeper warning-bearing section is fail-closed like the rest.
+        is_doc_caveat = is_warning and level <= 1
 
-        if allow_patterns:
+        if allow_patterns and not is_doc_caveat:
             if not _section_matches(heading, ancestors, allow_patterns):
                 continue
-        if drop_sections:
+        if drop_sections and not is_warning:
             if _section_matches(heading, ancestors, drop_sections):
                 continue
         kept.append(sec)
@@ -337,6 +354,50 @@ def strip_xml_blocks(md_text, min_chars=XML_STRIP_MIN_CHARS):
         return m.group(0)
 
     return _XML_FENCE_RE.sub(_replace, md_text)
+
+
+# The curation fields fetch_companion snapshots from companion_sources.json into
+# companion_manifest.json. They are curation *policy*, not fetch provenance, so a
+# manifest written before a policy edit silently chunks the corpus under the OLD
+# rules — the build reports success and the numbers look plausible.
+_CURATION_FIELDS = ("sections", "drop_sections", "strip_xml_blocks")
+
+
+def _curation_of(entry):
+    """The curation policy of one config/manifest file record, normalized."""
+    return {
+        "sections": tuple(entry.get("sections") or ()),
+        "drop_sections": tuple(entry.get("drop_sections") or ()),
+        "strip_xml_blocks": bool(entry.get("strip_xml_blocks", False)),
+    }
+
+
+def curation_drift(config_files, manifest_files):
+    """Describe every curation difference between config and manifest file records.
+
+    Returns a list of human-readable drift strings (empty when they agree). Callers
+    treat a non-empty result as fatal: chunking would apply a stale allowlist, which
+    fails open — the sections a curator just excluded stay in the corpus, and the
+    build says nothing. Editing companion_sources.json requires re-running
+    fetch_companion.py so the manifest carries the new policy.
+    """
+    cfg = {e["path"]: e for e in config_files}
+    man = {e["path"]: e for e in manifest_files}
+    drift = []
+    for path in sorted(set(cfg) - set(man)):
+        drift.append(f"{path}: in companion_sources.json but not in the manifest")
+    for path in sorted(set(man) - set(cfg)):
+        drift.append(f"{path}: in the manifest but no longer in companion_sources.json")
+    for path in sorted(set(cfg) & set(man)):
+        want, have = _curation_of(cfg[path]), _curation_of(man[path])
+        for field in _CURATION_FIELDS:
+            if want[field] != have[field]:
+                drift.append(
+                    f"{path}: {field} is {list(have[field]) if isinstance(have[field], tuple) else have[field]!r} "
+                    f"in the manifest but {list(want[field]) if isinstance(want[field], tuple) else want[field]!r} "
+                    f"in companion_sources.json"
+                )
+    return drift
 
 
 def contains_raw_component_xml(text):

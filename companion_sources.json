@@ -60,7 +60,7 @@
       "priority": 3,
       "area": "Components",
       "title": "MCP Server Connection Component",
-      "sections": ["overview", "configuration fields", "authentication", "notes"],
+      "sections": ["critical warning", "overview", "configuration fields", "authentication", "notes"],
       "drop_sections": ["xml structure", "conversation starters"],
       "strip_xml_blocks": true
     },
@@ -87,8 +87,8 @@
       "priority": 3,
       "area": "Steps",
       "title": "MCP Server Start Step",
-      "sections": ["key attributes", "xml structure", "process configuration", "typical process pattern", "response handling", "component dependencies"],
-      "drop_sections": null,
+      "sections": ["key attributes", "process configuration", "typical process pattern", "response handling", "component dependencies"],
+      "drop_sections": ["xml structure"],
       "strip_xml_blocks": true
     },
     {
@@ -96,7 +96,7 @@
       "priority": 4,
       "area": "Steps",
       "title": "Data Process Groovy Step",
-      "sections": ["purpose", "development philosophy", "mandatory datacontext loop", "working with properties", "critical rules and gotchas"],
+      "sections": ["purpose", "development philosophy", "mandatory datacontext loop", "stream management", "working with properties", "critical rules and gotchas"],
       "drop_sections": null,
       "strip_xml_blocks": true
     },
@@ -114,7 +114,7 @@
       "priority": 3,
       "area": "Platform Entities",
       "title": "MCP Server",
-      "sections": ["architecture", "url structure", "build order", "protocol details", "supported vs unsupported features", "profile/schema changes"],
+      "sections": ["architecture", "url structure", "build order", "protocol details", "supported vs unsupported features", "known limitations", "profile/schema changes"],
       "drop_sections": null,
       "strip_xml_blocks": true
     }

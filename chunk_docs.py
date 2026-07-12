@@ -25,6 +25,7 @@ from companion import (
     OFFICIAL_VERIFICATION_STATUS,
     PROVENANCE_FIELDS,
     companion_chunk_id,
+    curation_drift,
     filter_sections,
     is_denied_path,
     split_markdown_sections,
@@ -34,6 +35,7 @@ from companion import (
 DEFAULT_INPUT = "knowledge_base/"
 DEFAULT_OUTPUT = "chunks.jsonl"
 DEFAULT_COMPANION_STAGING = "companion_sources/"
+DEFAULT_COMPANION_CONFIG = "companion_sources.json"
 DEFAULT_MIN_TOKENS = 100
 DEFAULT_MAX_TOKENS = 1200
 HEADING_TAGS = {f"h{i}" for i in range(1, 9)}
@@ -541,14 +543,34 @@ def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbos
     return chunks
 
 
-def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbose=False):
+def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbose=False,
+                      config_path=None):
     """Load a companion manifest and chunk every staged Markdown file it lists.
 
     Fails if the manifest or a staged file is missing (every companion source is
     mandatory); warns if an allowlisted file yields no chunks.
+
+    The section allow/deny filters are read from the MANIFEST, which fetch_companion
+    snapshotted from companion_sources.json at fetch time. When ``config_path`` is
+    given, refuse to build on a manifest whose curation policy has since drifted from
+    the config: chunking a stale allowlist fails OPEN (the sections a curator just
+    excluded quietly stay in the corpus) and the build otherwise reports success.
     """
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
+
+    if config_path:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        drift = curation_drift(config.get("files", []), manifest.get("files", []))
+        if drift:
+            raise ValueError(
+                "Companion curation policy has drifted from the manifest — the "
+                "manifest was written before the current companion_sources.json.\n  "
+                + "\n  ".join(drift)
+                + f"\nRe-run: python fetch_companion.py --config {config_path} "
+                  f"--manifest {manifest_path}"
+            )
 
     upstream = {"repo": manifest["repo"], "commit": manifest["commit"]}
     all_companion = []
@@ -589,6 +611,12 @@ def main():
         help="companion_manifest.json describing the staged companion files; "
              "enables the supplemental Companion corpus when provided",
     )
+    parser.add_argument(
+        "--companion-config", default=DEFAULT_COMPANION_CONFIG,
+        help="companion_sources.json to check the manifest's curation policy against; "
+             "the build fails if the manifest was written before a policy edit. "
+             "Pass '' to skip the check",
+    )
     args = parser.parse_args()
 
     all_chunks = []
@@ -628,6 +656,7 @@ def main():
         companion_chunks = process_companion(
             args.companion_manifest, args.companion_input,
             args.min_tokens, args.max_tokens, args.verbose,
+            config_path=args.companion_config or None,
         )
         for chunk in companion_chunks:
             category_counts[chunk["category"]] = category_counts.get(chunk["category"], 0) + 1

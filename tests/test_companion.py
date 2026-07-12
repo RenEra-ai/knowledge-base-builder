@@ -162,6 +162,36 @@ def test_filter_sections_never_drops_tech_preview_warning():
     assert "Component Structure" in kept
 
 
+def test_tech_preview_warning_does_not_override_the_allowlist():
+    """A deep section is fail-closed even when its body carries the banner.
+
+    The upstream Tech Preview docs repeat the banner throughout, so exempting every
+    warning-bearing section from the allowlist would ingest whatever those files
+    happen to contain — including sections a curator never named.
+    """
+    secs = _secs(
+        (2, "Wanted", "the curated topic"),
+        (2, "Changelog", "> Technology Preview (Jan 2026): not production ready"),
+    )
+    kept = [s["heading"] for s in companion.filter_sections(secs, allow_patterns=["wanted"])]
+    assert kept == ["Wanted"], "an un-allowlisted section rode in on the Tech Preview banner"
+
+
+def test_document_level_tech_preview_caveat_survives_the_allowlist():
+    """The doc's own caveat is kept: there is exactly one, and every chunk needs it.
+
+    It cannot be readmitted via allow_patterns — the "#" title is an ancestor of every
+    section, so a pattern matching it would match the whole file.
+    """
+    secs = _secs(
+        (1, "MCP Server Reference", "> Technology Preview: not production ready"),
+        (2, "Wanted", "the curated topic"),
+        (2, "Changelog", "shipped v2"),
+    )
+    kept = [s["heading"] for s in companion.filter_sections(secs, allow_patterns=["wanted"])]
+    assert kept == ["MCP Server Reference", "Wanted"]
+
+
 # --- strip_xml_blocks ---------------------------------------------------------
 
 def test_strip_xml_blocks_removes_large_xml_fence():

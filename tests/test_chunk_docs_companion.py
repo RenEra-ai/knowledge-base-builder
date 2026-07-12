@@ -178,3 +178,33 @@ def test_process_companion_reads_staging_and_fails_on_missing(tmp_path):
     mpath.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(FileNotFoundError):
         process_companion(str(mpath), str(staging), 0, 100_000)
+
+
+def test_process_companion_fails_on_stale_curation_policy(tmp_path):
+    """Editing companion_sources.json without re-fetching must not build silently.
+
+    The manifest snapshots sections/drop_sections at fetch time and chunking reads
+    them from there, so a stale manifest fails OPEN: the sections a curator just
+    excluded stay in the corpus and the build still reports success.
+    """
+    staging = tmp_path / "staging"
+    (staging / "references/components").mkdir(parents=True)
+    (staging / "references/components/map_component.md").write_text(MD, encoding="utf-8")
+
+    entry = _entry()
+    entry["sections"] = ["purpose"]
+    manifest = {"repo": "R", "commit": "d" * 40, "files": [entry]}
+    mpath = tmp_path / "companion_manifest.json"
+    mpath.write_text(json.dumps(manifest), encoding="utf-8")
+
+    cpath = tmp_path / "companion_sources.json"
+    # Same file, but the curator has since tightened the allowlist.
+    config = {"files": [dict(entry, sections=["purpose", "key management"])]}
+    cpath.write_text(json.dumps(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="drifted"):
+        process_companion(str(mpath), str(staging), 0, 100_000, config_path=str(cpath))
+
+    # Re-fetching (manifest now agrees with the config) builds again.
+    mpath.write_text(json.dumps({**manifest, "files": config["files"]}), encoding="utf-8")
+    assert process_companion(str(mpath), str(staging), 0, 100_000, config_path=str(cpath))

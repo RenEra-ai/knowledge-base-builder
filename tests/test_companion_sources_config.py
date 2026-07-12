@@ -26,6 +26,8 @@ future "reduce the XML" pass from gutting them.
 import json
 import os
 
+import companion
+
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "companion_sources.json")
 
 # Doctrine / gotcha / testing guidance already served by the MCP through
@@ -43,11 +45,23 @@ _DOCTRINE_PATHS = {
 # Upstream sections that are pure <bns:Component> serializations. Each is under or
 # near XML_STRIP_MIN_CHARS in at least one file, so the size-based strip cannot be
 # relied on — the allowlist must drop the section outright.
+#
+# Since every file moved to a positive `sections` allowlist, these drops no longer
+# *fire*: no allow pattern selects these headings, so the allowlist already excludes
+# them (only 2 of the 15 configured drop patterns can currently change the kept set).
+# They are kept as a second gate, and asserted here, precisely so that widening an
+# allowlist later cannot silently re-admit a component skeleton — the drop would then
+# activate. Read them as a backstop, not as what is doing the work today.
 _REQUIRED_DROPS = {
     "references/components/map_component.md": {"component structure", "complete examples"},
     "references/components/map_component_functions.md": {"complete working example"},
     "references/components/mcp_server_connection_component.md": {"xml structure"},
     "references/components/mcp_server_operation_component.md": {"xml structure"},
+    # The start step's "XML Structure" is a canned <shape> skeleton with placeholder
+    # GUIDs — explicit_non_goal "Do not ingest canned XML templates", and its plan
+    # section_scope never names it. Its attribute vocabulary is already carried by the
+    # allowlisted "Key Attributes" section.
+    "references/steps/mcp_server_start_step.md": {"xml structure"},
 }
 
 # Drops mandated by the plan for reasons other than component XML — the REST GET
@@ -88,7 +102,10 @@ _REQUIRED_SECTIONS = {
         "key attributes", "response handling", "component dependencies",
     },
     "references/steps/data_process_groovy_step.md": {
-        "working with properties", "critical rules and gotchas",
+        # "stream management" carries the plan's "storeStream requirement": the
+        # passthrough vs content-modification patterns. Rule #1 states the rule but
+        # not the two ways to satisfy it, so narrowing to the rule alone loses scope.
+        "stream management", "working with properties", "critical rules and gotchas",
     },
     "references/steps/data_process_step.md": {
         "purpose", "custom scripting", "available data process type reference",
@@ -103,19 +120,35 @@ _REQUIRED_SECTIONS = {
 # (<field id="connectTimeout" value="-1"/>, the customproperties nesting, the
 # <TagList>/<TagExpression> attribute reference). A curation pass that optimizes for
 # "less XML" would delete precisely these. This is the explicit keep-list that stops
-# that: the allowlist must keep selecting them.
+# that.
+#
+# These are the VERBATIM upstream headings, not allowlist patterns, and the test runs
+# the real companion.filter_sections over them. Asserting on headings is what makes
+# the guard real: a drop_sections entry cancels a keep by matching the same *heading*,
+# which need bear no substring relation to the *pattern* that allowed it — e.g.
+# drop "minimal configuration" kills the heading "Required Fields (Minimal
+# Configuration)" that the keep pattern "required fields" selects. Comparing patterns
+# to patterns would pass that green.
+# Each entry is the heading's real ANCESTRY CHAIN, outermost first, target last —
+# because filter_sections matches a section by its own heading OR any ancestor, so a
+# keep is only reproducible with the chain that carries it (e.g. "Basic Authentication"
+# is selected by no pattern of its own; it survives via its "Authentication Patterns"
+# parent). Modelling the target alone would report a false failure.
 _PLAN_SCOPED_KEEPS = {
-    "references/components/rest_connection_component.md": {
-        "required fields",          # <field id=...> vocabulary + required defaults
-        "authentication patterns",  # incl. the <bns:encryptedValues> preservation rule
-    },
-    "references/components/rest_connector_operation_component.md": {
-        "common header patterns",   # the type="customproperties" nesting
-        "query parameters",         # static-vs-dynamic dual configuration
-    },
-    "references/components/edi_profile_component.md": {
-        "taglists",                 # <TagList>/<TagExpression> attribute reference
-    },
+    "references/components/rest_connection_component.md": [
+        # <field id=...> vocabulary + the required -1/GLOBAL defaults
+        [(2, "Required Fields (Minimal Configuration)")],
+        # incl. the <bns:encryptedValues> preservation rule
+        [(2, "Authentication Patterns"), (3, "Basic Authentication")],
+    ],
+    "references/components/rest_connector_operation_component.md": [
+        [(2, "Common Header Patterns")],  # the type="customproperties" nesting
+        [(2, "Query Parameters")],        # static-vs-dynamic dual configuration
+    ],
+    "references/components/edi_profile_component.md": [
+        # <TagList>/<TagExpression> attribute reference
+        [(2, "Instance Identifiers and Qualifiers"), (3, "tagLists (Instance Identifiers)")],
+    ],
 }
 
 # Doctrine / XML-scaffolding topics the groovy allowlist must never re-admit
@@ -200,23 +233,34 @@ def test_positive_section_allowlists_stay_scoped():
 def test_plan_scoped_high_value_sections_are_not_dropped():
     """The keep-list: XML-dense but plan-scoped sections must survive curation.
 
-    These carry the field-id / attribute vocabulary needed to BUILD a component. They
-    are the sections a density-driven cleanup would remove first, so assert both that
-    the allowlist still selects them and that no drop_sections entry cancels them out
-    (drop_sections is applied AFTER the allowlist, so it can silently win).
+    These carry the field-id / attribute vocabulary needed to BUILD a component, and
+    are the sections a density-driven cleanup would remove first. Run the REAL
+    filter_sections over each heading so the assertion covers both ways a keep dies:
+    the allowlist no longer selecting it, and a drop_sections entry cancelling it
+    (drop is applied after allow, so it silently wins).
     """
     by_path = {e["path"]: e for e in _load()["files"]}
-    for path, keeps in _PLAN_SCOPED_KEEPS.items():
+    for path, chains in _PLAN_SCOPED_KEEPS.items():
         entry = by_path.get(path)
         assert entry is not None, f"{path} missing from allowlist"
-        have = {s.lower() for s in (entry.get("sections") or [])}
-        assert keeps <= have, f"{path}: allowlist no longer keeps {sorted(keeps - have)}"
-        dropped = [s.lower() for s in (entry.get("drop_sections") or [])]
-        for keep in keeps:
-            cancelled = [d for d in dropped if d in keep or keep in d]
-            assert not cancelled, (
-                f"{path}: drop_sections {cancelled} cancels the plan-scoped keep "
-                f"{keep!r} (drop is applied after allow, so it wins)"
+        for chain in chains:
+            # Reconstruct the real ancestry. Bodies are deliberately inert (no "Tech
+            # Preview" string), so no exemption can mask a curation failure.
+            sections = [{"level": lvl, "heading": h, "body": "x"} for lvl, h in chain]
+            kept = {
+                s["heading"] for s in companion.filter_sections(
+                    sections,
+                    allow_patterns=entry.get("sections"),
+                    drop_sections=entry.get("drop_sections"),
+                )
+            }
+            target = chain[-1][1]
+            assert target in kept, (
+                f"{path}: curation no longer keeps the plan-scoped section "
+                f"{target!r}. Either no `sections` pattern selects it (directly or via "
+                f"an ancestor), or a `drop_sections` pattern cancels it. This section "
+                f"carries build-critical field/attribute vocabulary — see "
+                f"_PLAN_SCOPED_KEEPS."
             )
 
 
