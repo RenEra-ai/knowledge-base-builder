@@ -47,7 +47,11 @@ from companion import (
     strip_xml_blocks,
 )
 from chunk_docs import (
+    DEFAULT_COMPANION_CONFIG,
+    DEFAULT_COMPANION_STAGING,
+    DEFAULT_INPUT,
     assign_chunk_indices,
+    chunk_markdown_html,
     derive_page_key,
     detect_category,
     elements_to_html,
@@ -109,10 +113,9 @@ def _fragment_body_text(fragment):
     return "\n".join(lines)
 
 
-def _render_markdown_html(body_text):
-    import markdown  # lazy: keeps the module importable without markdown
-
-    return markdown.markdown(body_text, extensions=["fenced_code", "tables"])
+# The companion Markdown -> HTML renderer is shared with the legacy path so an
+# extension change lands in exactly one place.
+_render_markdown_html = chunk_markdown_html
 
 
 def _chunk_section(*, source_type, title, breadcrumb, heading_display, payload,
@@ -418,12 +421,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Chunk Boomi docs with the S5 tokenizer-aware pipeline"
     )
-    parser.add_argument("--input", default="knowledge_base/",
+    parser.add_argument("--input", default=DEFAULT_INPUT,
                         help="Input directory of official HTML files")
     parser.add_argument("--output", default="chunks_s5.jsonl")
-    parser.add_argument("--companion-input", default="companion_sources/")
+    parser.add_argument("--companion-input", default=DEFAULT_COMPANION_STAGING)
     parser.add_argument("--companion-manifest", default=None)
-    parser.add_argument("--companion-config", default="companion_sources.json")
+    parser.add_argument("--companion-config", default=DEFAULT_COMPANION_CONFIG)
     parser.add_argument(
         "--snapshot", default=None,
         help="Frozen source snapshot directory; verifies then resolves ALL "
@@ -438,31 +441,25 @@ def main():
     args = parser.parse_args()
 
     if args.snapshot:
-        overridden = [
-            flag for flag, value, default in (
-                ("--input", args.input, "knowledge_base/"),
-                ("--companion-input", args.companion_input, "companion_sources/"),
-                ("--companion-manifest", args.companion_manifest, None),
-                ("--companion-config", args.companion_config, "companion_sources.json"),
-            ) if value != default
-        ]
-        if overridden:
-            print(f"FAILED: --snapshot is mutually exclusive with {overridden}")
-            sys.exit(1)
-        from snapshot import resolve_snapshot_inputs
+        from snapshot import apply_snapshot_to_args
 
-        try:
-            inputs = resolve_snapshot_inputs(args.snapshot)
-        except ValueError as e:
-            print(f"FAILED: snapshot verification: {e}")
-            sys.exit(1)
-        args.input = inputs["input"]
-        args.companion_input = inputs["companion_input"]
-        args.companion_manifest = inputs["companion_manifest"]
-        args.companion_config = inputs["companion_config"]
+        apply_snapshot_to_args(args, (
+            ("--input", args.input, DEFAULT_INPUT),
+            ("--companion-input", args.companion_input, DEFAULT_COMPANION_STAGING),
+            ("--companion-manifest", args.companion_manifest, None),
+            ("--companion-config", args.companion_config, DEFAULT_COMPANION_CONFIG),
+        ))
 
-    tokenizer = (FakeWordPieceTokenizer() if args.tokenizer == "fake"
-                 else load_tokenizer())
+    if args.tokenizer == "fake":
+        # The deterministic double must never split a release corpus: its
+        # counts are not the model's, so the 256-WordPiece guarantee would not
+        # hold. Loud warning so a misuse is visible in build logs.
+        print("WARNING: --tokenizer fake is a development/test double and must "
+              "NOT be used for a release build (its WordPiece counts are not "
+              "the pinned model's).", file=sys.stderr)
+        tokenizer = FakeWordPieceTokenizer()
+    else:
+        tokenizer = load_tokenizer()
 
     chunks = build_s5_chunks(
         official_input_dir=args.input,

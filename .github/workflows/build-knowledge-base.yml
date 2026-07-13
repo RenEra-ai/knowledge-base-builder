@@ -178,6 +178,21 @@ jobs:
         path: artifacts
         merge-multiple: true
 
+    - name: Validate pipeline/candidate combination
+      run: |
+        # The two inputs are orthogonal in the form but not independent: the
+        # legacy pipeline only ever builds the c0 baseline, and the s5 pipeline
+        # cannot build c0 (build_index rejects S5 chunks under c0). Fail fast
+        # with a clear message rather than produce a mislabeled artifact.
+        if [ "${{ inputs.pipeline }}" = "legacy" ] && [ "${{ inputs.candidate }}" != "c0" ]; then
+          echo "::error::pipeline=legacy only builds candidate c0; got '${{ inputs.candidate }}'"
+          exit 1
+        fi
+        if [ "${{ inputs.pipeline }}" = "s5" ] && [ "${{ inputs.candidate }}" = "c0" ]; then
+          echo "::error::pipeline=s5 cannot build c0 (the legacy baseline); choose b5/b56/b567"
+          exit 1
+        fi
+
     - name: Assemble knowledge base
       run: python assemble_scrape_artifacts.py --artifacts-dir artifacts --output-dir knowledge_base --failed-urls-output combined_failed_urls.txt
 

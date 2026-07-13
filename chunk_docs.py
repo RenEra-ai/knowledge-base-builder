@@ -41,6 +41,17 @@ DEFAULT_COMPANION_CONFIG = "companion_sources.json"
 DEFAULT_MIN_TOKENS = 100
 DEFAULT_MAX_TOKENS = 1200
 HEADING_TAGS = {f"h{i}" for i in range(1, 9)}
+# The single Markdown -> HTML rendering contract, shared by the legacy and S5
+# companion paths so an extension change lands in one place.
+MARKDOWN_EXTENSIONS = ["fenced_code", "tables"]
+
+
+def chunk_markdown_html(body):
+    """Render a companion Markdown body to HTML (body-only; the heading is
+    prepended to content, never re-rendered)."""
+    import markdown  # lazy: the HTML path must stay importable without markdown
+
+    return markdown.markdown(body, extensions=MARKDOWN_EXTENSIONS)
 
 
 def unwrap_divs(soup):
@@ -444,8 +455,6 @@ def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbos
     raw-XML stripping run before emit, so they only change *which* sections
     exist — never the contiguous per-page chunk_index assigned later in main().
     """
-    import markdown  # lazy: the HTML path must stay importable without markdown
-
     if text is None:
         with open(md_path, "r", encoding="utf-8") as f:
             text = f.read()
@@ -493,7 +502,7 @@ def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbos
         # content_html is body-only (heading excluded), mirroring the HTML path's
         # elements_to_html. The oversize split re-prepends the heading exactly
         # once; rendering from heading-inclusive content_text would duplicate it.
-        content_html = markdown.markdown(body, extensions=["fenced_code", "tables"])
+        content_html = chunk_markdown_html(body)
 
         raw = {
             "heading_text": heading,
@@ -707,28 +716,14 @@ def main():
     if args.snapshot:
         # Candidate builds read inputs ONLY from a verified frozen snapshot;
         # mixing in live paths would silently reintroduce source drift.
-        overridden = [
-            flag for flag, value, default in (
-                ("--input", args.input, DEFAULT_INPUT),
-                ("--companion-input", args.companion_input, DEFAULT_COMPANION_STAGING),
-                ("--companion-manifest", args.companion_manifest, None),
-                ("--companion-config", args.companion_config, DEFAULT_COMPANION_CONFIG),
-            ) if value != default
-        ]
-        if overridden:
-            print(f"FAILED: --snapshot is mutually exclusive with {overridden}")
-            sys.exit(1)
-        from snapshot import resolve_snapshot_inputs
+        from snapshot import apply_snapshot_to_args
 
-        try:
-            inputs = resolve_snapshot_inputs(args.snapshot)
-        except ValueError as e:
-            print(f"FAILED: snapshot verification: {e}")
-            sys.exit(1)
-        args.input = inputs["input"]
-        args.companion_input = inputs["companion_input"]
-        args.companion_manifest = inputs["companion_manifest"]
-        args.companion_config = inputs["companion_config"]
+        apply_snapshot_to_args(args, (
+            ("--input", args.input, DEFAULT_INPUT),
+            ("--companion-input", args.companion_input, DEFAULT_COMPANION_STAGING),
+            ("--companion-manifest", args.companion_manifest, None),
+            ("--companion-config", args.companion_config, DEFAULT_COMPANION_CONFIG),
+        ))
 
     all_chunks = []
     category_counts = {}

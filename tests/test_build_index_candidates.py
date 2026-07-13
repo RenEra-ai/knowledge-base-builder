@@ -405,6 +405,20 @@ def test_cli_candidate_runs_fixture_integrity_before_embedding(tmp_path):
     assert "fixture_marker_missing" in result.stdout
 
 
+def test_cli_c0_rejects_s5_chunks(tmp_path):
+    """c0 is the legacy baseline; S5 chunk records under c0 would embed a
+    mislabeled artifact, so the build must refuse."""
+    chunks_path = tmp_path / "chunks.jsonl"
+    _write_chunks(chunks_path, [_s5_chunk()])
+    result = subprocess.run(
+        [sys.executable, BUILD_INDEX, "--input", str(chunks_path),
+         "--output", str(tmp_path / "db"), "--candidate", "c0"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 1
+    assert "legacy baseline" in result.stdout
+
+
 def test_cli_b567_requires_cache_and_contract(tmp_path):
     chunks_path = tmp_path / "chunks.jsonl"
     _write_chunks(chunks_path, [_s5_chunk()])

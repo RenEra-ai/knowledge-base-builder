@@ -188,6 +188,33 @@ def resolve_snapshot_inputs(snapshot_dir):
     }
 
 
+def apply_snapshot_to_args(args, override_specs):
+    """Resolve ``args.snapshot`` into the four input args in place (shared by
+    both chunking CLIs so the mutual-exclusion, verify, and assignment logic
+    lives once).
+
+    ``override_specs`` is an iterable of ``(flag_name, current_value,
+    default_value)``; a value differing from its default means the operator
+    also passed an explicit input flag, which is mutually exclusive with
+    ``--snapshot``. On a conflict or snapshot-verification failure this prints a
+    ``FAILED:`` line and exits non-zero.
+    """
+    overridden = [flag for flag, value, default in override_specs
+                  if value != default]
+    if overridden:
+        print(f"FAILED: --snapshot is mutually exclusive with {overridden}")
+        sys.exit(1)
+    try:
+        inputs = resolve_snapshot_inputs(args.snapshot)
+    except ValueError as e:
+        print(f"FAILED: snapshot verification: {e}")
+        sys.exit(1)
+    args.input = inputs["input"]
+    args.companion_input = inputs["companion_input"]
+    args.companion_manifest = inputs["companion_manifest"]
+    args.companion_config = inputs["companion_config"]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Freeze/verify a source snapshot")
     sub = parser.add_subparsers(dest="command", required=True)

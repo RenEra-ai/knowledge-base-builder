@@ -1,7 +1,9 @@
 httpx
 beautifulsoup4
 markdown
-# kb-25 embedding contract pins (docs/plans/companion-kb-retrieval-fix-plan.json):
-# release builds and release comparisons must run under exactly these versions.
+# kb-25 embedding-contract pins: release builds and release comparisons must
+# run under exactly these versions (the manifest embedding_contract records the
+# model revision the pinned sentence-transformers resolves; chromadb is pinned
+# so persisted collection configs stay compatible with the serving side).
 chromadb==1.5.9
 sentence-transformers==5.6.0

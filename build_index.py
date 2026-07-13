@@ -313,9 +313,18 @@ def embedding_input_for(chunk, candidate, tokenizer=None, s7=None):
     if chunk.get("source_type") != COMPANION_SOURCE_TYPE:
         return b56_embedding_input(chunk), "raw"
 
-    from s7_eligibility import is_eligible
+    # Prefer the caller's precomputed eligible-id set (main() already ran one
+    # full is_eligible pass for the release gate) so eligibility is not
+    # recomputed — a full-document tokenizer pass + identifier extraction — for
+    # every companion chunk. Fall back to a direct check when no set is given.
+    eligible_ids = s7.get("eligible_ids") if s7 else None
+    if eligible_ids is not None:
+        eligible = chunk["id"] in eligible_ids
+    else:
+        from s7_eligibility import is_eligible
 
-    if not is_eligible(chunk, tokenizer):
+        eligible = is_eligible(chunk, tokenizer)
+    if not eligible:
         return b56_embedding_input(chunk), "raw"
 
     from s7_cache import chunk_cache_key
@@ -746,7 +755,19 @@ def main():
 
     candidate = args.candidate
     s7 = None
-    if candidate != "c0":
+    if candidate == "c0":
+        # c0 is the legacy baseline (implicit Chroma embeddings from raw
+        # content). Feeding it S5 chunks would embed heading-prefixed content
+        # as if it were legacy text — a mislabeled artifact. Reject rather than
+        # silently build the wrong baseline (the workflow's s5+c0 combination).
+        s5_chunks = [c["id"] for c in chunks if "source_record_id" in c]
+        if s5_chunks:
+            print(f"FAILED: candidate 'c0' is the legacy baseline but the input "
+                  f"has {len(s5_chunks)} S5 chunk record(s), e.g. {s5_chunks[:3]}. "
+                  "Use --candidate b5/b56/b567 for S5 chunks, or chunk with "
+                  "chunk_docs.py for a c0 baseline.")
+            sys.exit(1)
+    else:
         # Candidate builds require S5 chunk records throughout.
         non_s5 = [c["id"] for c in chunks if "source_record_id" not in c]
         if non_s5:
@@ -784,12 +805,15 @@ def main():
             with open(args.s7_contract, "r", encoding="utf-8") as f:
                 contract = json.load(f)
             cache = S7Cache.load(args.s7_cache)
-            s7 = {"cache": cache, "contract": contract,
-                  "identifiers_fn": chunk_identifiers}
-            tokenizer = HFWordPieceTokenizer()
+            # One tokenizer and one is_eligible pass, reused for the release
+            # gate AND (via eligible_ids) the embedding plan below.
+            b567_tokenizer = HFWordPieceTokenizer()
             eligible = [c for c in chunks
                         if c.get("source_type") == COMPANION_SOURCE_TYPE
-                        and is_eligible(c, tokenizer)]
+                        and is_eligible(c, b567_tokenizer)]
+            s7 = {"cache": cache, "contract": contract,
+                  "identifiers_fn": chunk_identifiers,
+                  "eligible_ids": {c["id"] for c in eligible}}
             release_errors = enforce_release(
                 cache, eligible, contract,
                 identifiers_fn=chunk_identifiers,
@@ -837,7 +861,8 @@ def main():
             print(f"FAILED: loaded model max_seq_length {model.max_seq_length} "
                   f"!= contract {MAX_SEQ_TOKENS}")
             sys.exit(1)
-        tokenizer = HFWordPieceTokenizer()
+        # Reuse the b567 gate's tokenizer when it was built; b5/b56 need one now.
+        tokenizer = b567_tokenizer if candidate == "b567" else HFWordPieceTokenizer()
         plan = compute_embedding_plan(chunks, candidate, tokenizer, s7=s7)
         embedding_dim = model.get_sentence_embedding_dimension()
 

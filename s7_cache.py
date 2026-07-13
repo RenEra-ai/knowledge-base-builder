@@ -175,13 +175,14 @@ class S7Cache:
 
 def _dedupe_by_key(chunks, contract, identifiers_fn):
     """key -> (representative chunk, identifiers, all usage chunks), stable order."""
+    # The contract hash is identical for every chunk in this call — canonical-
+    # JSON-serialize + sha256 the full prompt contract ONCE, not per chunk.
+    contract_sha = generator_contract_sha256(contract)
     by_key = {}
     for chunk in chunks:
         identifiers = sorted(identifiers_fn(chunk))
         gi = generation_input(chunk, identifiers)
-        key = cache_key(
-            generation_input_sha256(gi), generator_contract_sha256(contract)
-        )
+        key = cache_key(generation_input_sha256(gi), contract_sha)
         entry = by_key.setdefault(key, {"chunk": chunk, "identifiers": identifiers,
                                         "usages": []})
         entry["usages"].append(chunk)

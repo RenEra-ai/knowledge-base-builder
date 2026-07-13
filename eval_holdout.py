@@ -16,10 +16,10 @@ Target matching resolves a target to the CHUNKS that carry its content by frozen
 """
 import base64
 import binascii
-import hashlib
 import json
 import os
 
+from companion import sha256_hex
 from eval_gates import DISTANCE_GATE, GateReport
 
 DEFAULT_TOP_K = 5
@@ -99,7 +99,7 @@ def holdout_commitment(raw_b64):
     """
     rows = _parse_rows(raw_b64)
     return {
-        "sha256": hashlib.sha256(raw_b64.encode("utf-8")).hexdigest(),
+        "sha256": sha256_hex(raw_b64),
         "count": len(rows),
     }
 
