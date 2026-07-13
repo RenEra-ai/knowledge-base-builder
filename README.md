@@ -129,6 +129,66 @@ python build_url_tree.py --validate && python main.py && python fetch_companion.
 
 GitHub Actions uses the same flow, but splits the scrape into four balanced shards and runs at most two of them in parallel to stay within workflow time limits and reduce load on Boomi.
 
+## kb-25 candidate pipeline (S5/S6/S7)
+
+kb-25 replaces the `len(text)//4` token estimate with real WordPiece counting
+against the pinned embedding model (`all-MiniLM-L6-v2` @
+`1110a243fdf4706b3f48f1d95db1a4f5529b4d41`, sentence-transformers 5.6.0,
+chromadb 1.5.9). Four candidates are built **from one frozen source snapshot**
+and compared through the pinned serving stack:
+
+| candidate | chunking | embedding text | manifest |
+|---|---|---|---|
+| `c0` | legacy splitter | raw document | schema v1 |
+| `b5` | S5 tokenizer-aware | raw document | schema v1 |
+| `b56` | S5 + S6 header | deduplicated header + raw document | schema v2 |
+| `b567` | S5 + S6 + S7 | eval-gated synthetic descriptions for eligible Companion chunks (everything else embeds the B56 input) | schema v2 |
+
+Stages and tools:
+
+1. `snapshot.py freeze` — copy scrape + verified companion inputs into an
+   immutable snapshot recording `source_snapshot_sha256`; every candidate
+   chunker takes `--snapshot <dir>` and reads inputs ONLY from a snapshot that
+   verifies.
+2. `s5_pipeline.py` — tokenizer-aware splitting (S5) with exact source-byte
+   spans, plus the deduplicated contextual header (S6). Every final embedding
+   input is asserted ≤ 256 WordPieces — model-side truncation is forbidden.
+3. `s7_cache.py` / `s7_eligibility.py` / `s7_validate.py` — the S7 synthetic
+   description machinery: Companion-only eligibility (≥ 0.3 code-WordPiece
+   ratio, ≥ 2 structural identifiers), validated 1–3-sentence descriptions,
+   an immutable generation cache keyed by content + generator contract, and
+   release gates (missing entries fail; ≤ 10% raw_fallback usages). Release
+   builds never call an LLM.
+4. `build_index.py --candidate <c>` — explicit pinned-revision embeddings,
+   raw documents stored in Chroma, schema-v2 manifests with the embedding
+   contract, a pre-embedding fixture-marker integrity gate, and the
+   reproducibility `semantic_inputs.jsonl` sidecar.
+5. `eval_harness.py run` — every fixture query through the pinned Track A
+   `KbService.search(top_k=5)` (set `BOOMI_MCP_SERVER_PATH` to the
+   boomi-mcp-server checkout); `eval_harness.py compare` hard-gates two runs
+   (ids/documents/metadata/contracts/cache/semantic inputs/ranks/recall/
+   status; 0.0001 distance tolerance).
+6. `eval_gates.py` / `eval_holdout.py` — the B56 fallback gates, B567 publish
+   gates, identifier-regression rule, and sealed-holdout evaluation
+   (`KB_RELEASE_HOLDOUT_B64`; only its SHA-256 + count are logged before
+   evaluation).
+
+**Release decision:** publish B567 only when it passes calibration AND the
+sealed holdout. Otherwise publish B56 only when its separate fallback gates
+pass — a B56 release fixes truncation and context fidelity but does **not**
+claim the original generic-retrieval defect (G01) is solved. kb-24 remains the
+rollback artifact.
+
+**Reproducibility:** release builds and release comparisons run ONLY under the
+pinned CI environment (requirements.txt pins, same CPU runner class, CPU-only,
+single Torch/OMP/MKL thread — `eval_harness.pin_determinism`). Locally built
+candidates are never release-grade. Raw float-vector hashes, Chroma database
+hashes, and release tarball hashes are diagnostic-only, never gating.
+
+Explicitly out of kb-25's scope: BM25, per-source result quotas, automatic
+server-side query rewriting/RRF, dual-vector indexes, and S7 on official
+documentation chunks.
+
 ## Output
 
 The final artifact is `boomi_knowledge_db/` — a portable ChromaDB directory for downstream consumption (MCP server, RAG pipeline, etc.).

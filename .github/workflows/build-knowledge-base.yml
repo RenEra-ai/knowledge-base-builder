@@ -4,6 +4,22 @@ on:
   schedule:
     - cron: '0 6 * * 0'  # Weekly on Sunday at 6am UTC
   workflow_dispatch:
+    inputs:
+      pipeline:
+        description: >-
+          Chunking pipeline: legacy (token-estimate splitter, kb-24 lineage)
+          or s5 (tokenizer-aware kb-25 pipeline over a frozen source snapshot)
+        type: choice
+        options: [legacy, s5]
+        default: legacy
+      candidate:
+        description: >-
+          kb-25 candidate for the s5 pipeline (c0 uses the legacy splitter and
+          is only meaningful with pipeline=legacy; b567 additionally requires
+          s7_cache.jsonl + s7_contract.json checked in at the repo root)
+        type: choice
+        options: [c0, b5, b56, b567]
+        default: c0
 
 permissions:
   contents: write
@@ -168,17 +184,50 @@ jobs:
     - name: Fetch companion sources
       run: python fetch_companion.py --config companion_sources.json --staging companion_sources --manifest companion_manifest.json
 
-    - name: Chunk documents
+    - name: Freeze source snapshot
+      if: inputs.pipeline == 's5'
+      run: |
+        python snapshot.py freeze \
+          --official knowledge_base/ \
+          --companion-staging companion_sources/ \
+          --companion-manifest companion_manifest.json \
+          --companion-config companion_sources.json \
+          --out source_snapshot/
+        SNAP=$(python snapshot.py verify --snapshot source_snapshot/ | awk '/source_snapshot_sha256/ {print $2}')
+        echo "SOURCE_SNAPSHOT_SHA256=$SNAP" >> "$GITHUB_ENV"
+
+    - name: Chunk documents (legacy)
+      if: inputs.pipeline != 's5'
       run: |
         python chunk_docs.py --verbose \
           --companion-input companion_sources \
           --companion-manifest companion_manifest.json
 
+    - name: Chunk documents (S5)
+      if: inputs.pipeline == 's5'
+      run: python s5_pipeline.py --snapshot source_snapshot/ --output chunks.jsonl
+
     - name: Build semantic index
+      if: inputs.pipeline != 's5'
       run: |
         python build_index.py --verify \
           --artifact-tag "kb-${{ github.run_number }}" \
           --builder-commit "${{ github.sha }}"
+
+    - name: Build semantic index (candidate)
+      if: inputs.pipeline == 's5'
+      run: |
+        EXTRA=""
+        if [ "${{ inputs.candidate }}" = "b567" ]; then
+          EXTRA="--s7-cache s7_cache.jsonl --s7-contract s7_contract.json"
+        fi
+        python build_index.py --verify \
+          --candidate "${{ inputs.candidate }}" \
+          --source-snapshot-sha256 "$SOURCE_SNAPSHOT_SHA256" \
+          --semantic-inputs-out boomi_knowledge_db/semantic_inputs.jsonl \
+          --artifact-tag "kb-${{ github.run_number }}" \
+          --builder-commit "${{ github.sha }}" \
+          $EXTRA
 
     - name: Bundle failed URL report
       run: cp combined_failed_urls.txt boomi_knowledge_db/_failed_urls.txt
