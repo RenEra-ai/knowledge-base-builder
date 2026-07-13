@@ -261,6 +261,21 @@ def test_synthetic_wrapper_lengthens_past_a_bare_marker_run():
         assert marker.count("`") >= 5
 
 
+def test_unbalanceable_fenced_split_fails_closed():
+    """When a synthetic open would be paired with an unmodifiable SOURCE close
+    and a codepoint-split bare-run tail between them (a pathological tiny-budget
+    case unreachable with the real tokenizer), the splitter FAILS CLOSED rather
+    than silently emit invalid fenced Markdown."""
+    class _CharTokenizer:
+        def count(self, text):
+            return len(text)
+
+    payload = "```py\naaaaaaa```\n```"
+    with pytest.raises(UnsplittableSpanError, match="valid Markdown"):
+        s5_splitter.split_payload(payload, base_offset=0, budget_fn=lambda _i: 7,
+                                  tokenizer=_CharTokenizer(), source_path="t.md")
+
+
 def test_oversized_fence_marker_prefixed_line_stays_balanced():
     """Regression: an oversized minified code line that BEGINS with a fence-
     marker run must not be codepoint-split onto the fence-open fragment — a

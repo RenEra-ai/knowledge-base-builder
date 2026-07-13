@@ -455,6 +455,26 @@ class _Splitter:
             span_end = self._finished[i + 1][0] if i + 1 < len(self._finished) else total_chars
             raw_lines = self._payload[content_start:content_end].split("\n")
             syn_open, syn_close = _safe_fence_wrappers(raw_lines, syn_open, syn_close)
+            # Uphold the hard rule "split fenced code stays valid Markdown". A
+            # fragment whose close is a SOURCE fence line (unmodifiable, and so
+            # not lengthenable) can, under a pathological tiny budget, end up
+            # with a codepoint-split bare-run tail beside that close that no
+            # amount of synthetic growth can balance. That cannot occur with the
+            # real tokenizer at production budgets, but if it ever does, fail
+            # closed with the source location rather than silently ship invalid
+            # Markdown.
+            if not _fragment_is_balanced(
+                ([syn_open] if syn_open else []) + raw_lines
+                + ([syn_close] if syn_close else [])
+            ):
+                raise UnsplittableSpanError(
+                    self._source_path,
+                    self._line_number(content_start),
+                    self._base + self._byte_of[span_start],
+                    self._base + self._byte_of[span_end],
+                    reason="cannot wrap split fenced code as valid Markdown "
+                           "under this budget",
+                )
             fragments.append(Fragment(
                 raw_lines=raw_lines,
                 spans=[SourceSpan(self._base + self._byte_of[span_start],
