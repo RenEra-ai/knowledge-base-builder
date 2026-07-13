@@ -1,5 +1,7 @@
 httpx
 beautifulsoup4
 markdown
-chromadb
-sentence-transformers
+# kb-25 embedding contract pins (docs/plans/companion-kb-retrieval-fix-plan.json):
+# release builds and release comparisons must run under exactly these versions.
+chromadb==1.5.9
+sentence-transformers==5.6.0
