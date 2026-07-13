@@ -245,7 +245,8 @@ def split_markdown_sections_with_offsets(md_text):
         pos += len(line.encode("utf-8")) + 1
 
     sections = []
-    current = {"level": 0, "heading": "", "body_lines": [], "line_indices": []}
+    current = {"level": 0, "heading": "", "body_lines": [], "line_indices": [],
+               "heading_index": None}
     open_fence = None  # (char, length) while inside a fenced code block
 
     def _flush(sec):
@@ -282,6 +283,7 @@ def split_markdown_sections_with_offsets(md_text):
                 "heading": _clean_heading(match.group(2)),
                 "body_lines": [],
                 "line_indices": [],
+                "heading_index": index,
             }
         else:
             current["body_lines"].append(line)
@@ -294,6 +296,7 @@ def split_markdown_sections_with_offsets(md_text):
         body = raw_body.strip()
         sec["body"] = body
         indices = sec.pop("line_indices")
+        heading_index = sec.pop("heading_index")
         if body and indices:
             region_start = line_starts[indices[0]]
             # Leading/trailing whitespace stripped from the body is excluded
@@ -303,7 +306,17 @@ def split_markdown_sections_with_offsets(md_text):
             sec["body_start_byte"] = start
             sec["body_end_byte"] = start + len(body.encode("utf-8"))
         else:
-            anchor = line_starts[indices[0]] if indices else len(md_text.encode("utf-8"))
+            # Empty body: an empty span at the section's OWN position (the line
+            # after its heading, or the document start for the level-0
+            # preamble) — never at the document end.
+            if indices:
+                anchor = line_starts[indices[0]]
+            elif heading_index is not None and heading_index + 1 < len(line_starts):
+                anchor = line_starts[heading_index + 1]
+            elif heading_index is not None:
+                anchor = line_starts[heading_index] + len(lines[heading_index].encode("utf-8"))
+            else:
+                anchor = 0
             sec["body_start_byte"] = anchor
             sec["body_end_byte"] = anchor
     return sections

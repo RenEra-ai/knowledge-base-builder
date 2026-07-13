@@ -342,6 +342,20 @@ def b56_holdout_gates(results, results_c0):
 
     failures.extend(_official_holdout_failures(results))
 
+    # The rank no-regression check is only meaningful if the C0 baseline is
+    # anchor-matchable. Legacy (c0) corpora carry no source_record_id, so
+    # match_target resolves nothing and every C0 group is a miss (rank 99) —
+    # which would make "rank <= C0 rank" pass vacuously. Refuse to certify
+    # no-regression against a baseline whose Companion targets are all misses.
+    if all(not _best_group(_entry_by_family(results_c0, family))["hit"]
+           for family in COMPANION_FAMILIES):
+        failures.append(
+            "holdout-regression: the C0 baseline matched zero Companion holdout "
+            "targets — its chunks are not anchor-matchable (no source_record_id), "
+            "so a rank no-regression comparison cannot be computed. Build the C0 "
+            "holdout baseline from source-record-tracked chunks."
+        )
+
     for family in COMPANION_FAMILIES:  # every non-official hidden query
         entry = _entry_by_family(results, family)
         base = _entry_by_family(results_c0, family)

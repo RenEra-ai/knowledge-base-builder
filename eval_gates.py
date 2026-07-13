@@ -97,7 +97,12 @@ def _unique_companion_groups(results):
                 continue
             cur_rank = current[0] if current[0] is not None else 99
             new_rank = candidate[0] if candidate[0] is not None else 99
-            if new_rank < cur_rank:
+            cur_dist = current[1] if current[1] is not None else float("inf")
+            new_dist = candidate[1] if candidate[1] is not None else float("inf")
+            # Best = lowest rank; on an equal rank, the lower distance — so the
+            # within-0.45 count and the distance-adjacent gates see the group's
+            # best observation, not whichever query happened to be seen first.
+            if (new_rank, new_dist) < (cur_rank, cur_dist):
                 best[identity] = candidate
     return best
 

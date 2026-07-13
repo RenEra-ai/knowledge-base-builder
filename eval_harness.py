@@ -218,6 +218,14 @@ def compare_runs(run_a, run_b, tolerance=NUMERIC_TOLERANCE):
             qa, qb = queries_a[qid], queries_b[qid]
             if qa["status"] != qb["status"]:
                 failures.append(f"status: differs for {qid}")
+            if len(qa["groups"]) != len(qb["groups"]):
+                # zip() would silently ignore the extra groups otherwise, so a
+                # run bundle with fewer target groups must fail the hard gate.
+                failures.append(
+                    f"results: {qid} has {len(qa['groups'])} vs "
+                    f"{len(qb['groups'])} target groups"
+                )
+                continue
             for ga, gb in zip(qa["groups"], qb["groups"]):
                 if ga["rank"] != gb["rank"]:
                     failures.append(f"ranks: differ for {qid} group {ga['index']}")

@@ -302,6 +302,18 @@ def test_manifest_v2_carries_the_embedding_contract_per_candidate():
         assert manifest["embedding_model"] == "all-MiniLM-L6-v2"
 
 
+def test_manifest_v2_forces_embedding_model_to_the_pinned_id():
+    """Candidate builds embed with the pinned MODEL_ID regardless of --model,
+    so the manifest's top-level embedding_model must equal the contract model
+    (the serving resolver rejects a mismatch)."""
+    manifest = build_manifest_v2(
+        [_s5_chunk()], _args(model="some-other-model"), 384, "b56",
+        source_snapshot_sha256="f" * 64,
+    )
+    assert manifest["embedding_model"] == "all-MiniLM-L6-v2"
+    assert manifest["embedding_model"] == manifest["embedding_contract"]["model_id"]
+
+
 def test_manifest_v2_requires_a_source_snapshot_hash():
     with pytest.raises(ValueError, match="source_snapshot_sha256"):
         build_manifest_v2([_s5_chunk()], _args(), 384, "b56",

@@ -51,14 +51,26 @@ def freeze_snapshot(*, official_dir, companion_staging, companion_manifest,
                     companion_config, out_dir):
     """Copy all build inputs into ``out_dir`` and record their hashes.
 
-    Fails closed: a companion file missing from staging, or staged content that
-    does not hash to the sha256 its manifest entry recorded, aborts the freeze —
-    a snapshot must never bless bytes that were not verifiably fetched.
+    Fails closed via the SAME companion gate the chunker uses
+    (chunk_docs.verified_companion_texts): a missing staged file, a manifest
+    entry lacking a sha256, staged content that does not hash to it, a
+    traversal/absolute path, or curation drift from the config all abort the
+    freeze — a snapshot must never bless bytes that were not verifiably fetched.
     Returns the written snapshot manifest dict.
     """
-    with open(companion_manifest, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
+    # verified_companion_texts applies is_denied_path, requires sha256, verifies
+    # every staged file's hash, and checks curation drift — the fail-closed
+    # contract we must not weaken by re-implementing it here.
+    from chunk_docs import verified_companion_texts
 
+    upstream, entries = verified_companion_texts(
+        companion_manifest, companion_staging, config_path=companion_config
+    )
+
+    # Rebuild out_dir from scratch: a re-freeze that left stale files behind
+    # would fail verify_snapshot's own unrecorded-file check.
+    if os.path.isdir(out_dir):
+        shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
     records = []
 
@@ -72,25 +84,26 @@ def freeze_snapshot(*, official_dir, companion_staging, companion_manifest,
             "bytes": os.path.getsize(dest),
         })
 
+    def _write(text, rel_dest):
+        dest = os.path.join(out_dir, rel_dest)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(text)
+        records.append({
+            "path": rel_dest,
+            "sha256": sha256_hex(text),
+            "bytes": os.path.getsize(dest),
+        })
+
     for filename in sorted(os.listdir(official_dir)):
         src = os.path.join(official_dir, filename)
         if os.path.isfile(src):
             _copy(src, f"official/{filename}")
 
-    for entry in manifest.get("files", []):
-        rel = entry["path"]
-        src = os.path.join(companion_staging, rel)
-        if not os.path.isfile(src):
-            raise FileNotFoundError(f"Staged companion file missing: {src}")
-        expected = entry.get("sha256")
-        with open(src, "r", encoding="utf-8") as f:
-            staged_text = f.read()
-        if expected and sha256_hex(staged_text) != expected:
-            raise ValueError(
-                f"Staged companion file does not match its manifest sha256: {rel}. "
-                "Re-run fetch_companion.py before freezing a snapshot."
-            )
-        _copy(src, f"companion/{rel}")
+    # Write the exact verified bytes (not a re-read of staging) so the snapshot
+    # captures what the gate blessed, with no window for the file to change.
+    for entry, staged_text in entries:
+        _write(staged_text, f"companion/{entry['path']}")
 
     _copy(companion_manifest, "companion_manifest.json")
     _copy(companion_config, "companion_sources.json")
@@ -99,8 +112,8 @@ def freeze_snapshot(*, official_dir, companion_staging, companion_manifest,
         "schema": SNAPSHOT_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "upstream": {
-            "repo": manifest.get("repo", ""),
-            "commit": manifest.get("commit", ""),
+            "repo": upstream.get("repo", ""),
+            "commit": upstream.get("commit", ""),
         },
         "files": sorted(records, key=lambda r: r["path"]),
         "source_snapshot_sha256": _combined_sha256(records),

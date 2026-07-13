@@ -322,6 +322,17 @@ def test_b56_holdout_equal_ranks_pass_with_rescue_advisory():
     assert any("rescue gate" in a for a in report.advisories)
 
 
+def test_b56_holdout_unmatchable_c0_baseline_fails_not_vacuous_pass():
+    """A C0 baseline that matched zero Companion targets (legacy chunks have no
+    source_record_id) must NOT let the rank no-regression check pass vacuously."""
+    c0 = _holdout_results()
+    for family in COMPANION_FAMILIES:
+        _set_family_group(c0, family, 0, rank=None, distance=None)  # all misses
+    report = b56_holdout_gates(_holdout_results(rank=1), c0)
+    assert not report.passed
+    assert any("not anchor-matchable" in f for f in report.failures)
+
+
 def test_family_taxonomy_matches_the_intent_plan():
     assert COMPANION_FAMILIES == (
         "set_document_property", "rest_operation_step", "groovy_stream",

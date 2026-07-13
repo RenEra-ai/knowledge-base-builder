@@ -108,6 +108,29 @@ def test_split_markdown_sections_strips_closed_atx_hashes():
     assert secs2[0]["heading"] == "Using C#"
 
 
+def test_split_markdown_sections_with_offsets_body_decodes_exactly():
+    md = "# Title\n\nAlpha body.\n\n## Sub\n\nBéta ✅ body.\n"
+    raw = md.encode("utf-8")
+    for sec in companion.split_markdown_sections_with_offsets(md):
+        decoded = raw[sec["body_start_byte"]:sec["body_end_byte"]].decode("utf-8")
+        assert decoded == sec["body"]
+
+
+def test_split_markdown_sections_with_offsets_heading_only_span_at_section():
+    """A heading with no body gets an EMPTY span at its own position — never at
+    the document end (which would misplace a downstream source anchor)."""
+    md = "# Title\n\nbody here\n\n## EmptySection\n## Next\n\nmore\n"
+    doc_bytes = len(md.encode("utf-8"))
+    secs = companion.split_markdown_sections_with_offsets(md)
+    empty = next(s for s in secs if s["heading"] == "EmptySection")
+    assert empty["body"] == ""
+    assert empty["body_start_byte"] == empty["body_end_byte"]
+    assert empty["body_start_byte"] < doc_bytes
+    # It sits after its heading line, before the next section.
+    nxt = next(s for s in secs if s["heading"] == "Next")
+    assert empty["body_start_byte"] <= nxt["body_start_byte"]
+
+
 # --- filter_sections ----------------------------------------------------------
 
 def _secs(*pairs):

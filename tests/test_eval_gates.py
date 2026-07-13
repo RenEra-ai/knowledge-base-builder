@@ -171,6 +171,20 @@ def test_b567_unique_group_hits_boundary():
     assert any("unique target groups in" in f for f in report.failures)
 
 
+def test_unique_companion_groups_tiebreaks_equal_rank_by_lower_distance():
+    """When the same group is seen at equal rank by two queries, the LOWER
+    distance wins — so the within-0.45 count reflects the group's best."""
+    from eval_gates import _unique_companion_groups
+
+    # G01's DocumentPropertySet group also appears in I01/I06; give one instance
+    # rank 1 @ 0.50 and another rank 1 @ 0.30. The 0.30 must be recorded.
+    results = _passing_results(rank=1, distance=0.50)
+    _set_group(results, "I01", 0, rank=1, distance=0.30)  # DPS group, better dist
+    best = _unique_companion_groups(results)
+    dps_key = next(k for k in best if 'type="DocumentPropertySet"' in "".join(k[1]))
+    assert best[dps_key] == (1, 0.30)
+
+
 def test_b567_mrr_gate_fails_in_isolation():
     b567 = _passing_results()
     # Every group still hits, but at rank 5 -> MRR 0.2 << 0.65 while the

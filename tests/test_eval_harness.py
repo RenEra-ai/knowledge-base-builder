@@ -166,6 +166,15 @@ def test_each_hard_gate_class_fails_independently(mutate, expected_class):
         report.failures
 
 
+def test_group_count_mismatch_fails_the_hard_gate():
+    """A run bundle with fewer target groups must fail, not slip through zip()."""
+    fewer = _bundle()
+    fewer["results"]["queries"]["G01"]["groups"] = []
+    report = compare_runs(_bundle(), fewer)
+    assert not report.passed
+    assert any("target groups" in f for f in report.failures)
+
+
 def test_distance_tolerance_boundary():
     within = _bundle()
     within["results"]["queries"]["G01"]["groups"][0]["distance"] = 0.31009

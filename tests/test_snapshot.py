@@ -135,6 +135,52 @@ def test_freeze_fails_on_staged_sha_mismatch(tmp_path):
         freeze_snapshot(out_dir=str(tmp_path / "snapshot"), **sources)
 
 
+def test_freeze_rejects_traversal_path_in_manifest(tmp_path):
+    """A tampered manifest with a traversal path must be refused at freeze —
+    the shared companion gate applies is_denied_path (defense in depth)."""
+    sources = _make_sources(tmp_path)
+    manifest_path = sources["companion_manifest"]
+    manifest = json.loads(open(manifest_path).read())
+    manifest["files"][0]["path"] = "../../../etc/hosts"
+    open(manifest_path, "w").write(json.dumps(manifest))
+    # The config must agree so the curation-drift gate isn't what fires.
+    config_path = sources["companion_config"]
+    open(config_path, "w").write(json.dumps(
+        {"repo": manifest["repo"], "files": [{"path": "../../../etc/hosts"}]}))
+    with pytest.raises(ValueError, match="disallowed path"):
+        freeze_snapshot(out_dir=str(tmp_path / "snapshot"), **sources)
+
+
+def test_freeze_requires_manifest_sha256(tmp_path):
+    """A manifest entry without a sha256 must abort the freeze — the gate is
+    fail-closed, not fail-open."""
+    sources = _make_sources(tmp_path)
+    manifest_path = sources["companion_manifest"]
+    manifest = json.loads(open(manifest_path).read())
+    del manifest["files"][0]["sha256"]
+    open(manifest_path, "w").write(json.dumps(manifest))
+    with pytest.raises(ValueError, match="no sha256"):
+        freeze_snapshot(out_dir=str(tmp_path / "snapshot"), **sources)
+
+
+def test_refreeze_clears_stale_files_and_reverifies(tmp_path):
+    """Re-freezing into an existing snapshot dir must not leave stale files
+    that verify_snapshot's unrecorded-file check would then reject."""
+    out_dir, _ = _freeze(tmp_path)
+    # A stray file from a prior freeze.
+    with open(os.path.join(out_dir, "official", "stale_page.html"), "w") as f:
+        f.write("<h1>stale</h1>")
+    sources = {
+        "official_dir": str(tmp_path / "knowledge_base"),
+        "companion_staging": str(tmp_path / "companion_sources"),
+        "companion_manifest": str(tmp_path / "companion_manifest.json"),
+        "companion_config": str(tmp_path / "companion_sources.json"),
+    }
+    freeze_snapshot(out_dir=out_dir, **sources)
+    assert not os.path.exists(os.path.join(out_dir, "official", "stale_page.html"))
+    verify_snapshot(out_dir)  # must not raise on unrecorded files
+
+
 def test_combined_hash_is_deterministic_across_freezes(tmp_path):
     out_a, manifest_a = _freeze(tmp_path)
     out_b = str(tmp_path / "snapshot_b")

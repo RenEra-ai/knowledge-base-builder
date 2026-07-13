@@ -133,6 +133,16 @@ def _chunk_section(*, source_type, title, breadcrumb, heading_display, payload,
         + _fence_wrapper_reserve(payload, tokenizer)
     )
     budget = EFFECTIVE_BUDGET - reserved
+    if budget <= 0:
+        # The header + repeated heading + fence wrappers alone exhaust the model
+        # window, so no source text can accompany them. Fail with a clear,
+        # actionable error rather than the splitter's generic UnsplittableSpan.
+        raise ValueError(
+            f"S5 reservation leaves no room for content in {source_path} "
+            f"({heading_display!r}): header+heading+fence wrappers reserve "
+            f"{reserved} of {EFFECTIVE_BUDGET} WordPieces. Shorten the section "
+            "heading or split the source upstream."
+        )
 
     fragments = split_payload(
         payload, base_offset=base_offset, budget_fn=lambda _i: budget,
@@ -140,6 +150,9 @@ def _chunk_section(*, source_type, title, breadcrumb, heading_display, payload,
     )
     assert_spans_tile(payload, base_offset, fragments, source_path)
 
+    # source_token_count is the whole section payload's count — identical for
+    # every fragment, so compute it once (not once per fragment).
+    source_token_count = tokenizer.count(payload)
     partials = []
     for index, fragment in enumerate(fragments):
         body_text = _fragment_body_text(fragment)
@@ -161,17 +174,25 @@ def _chunk_section(*, source_type, title, breadcrumb, heading_display, payload,
             )
 
         if stripped_xml:
+            # The payload is a synthetic rewrite (oversized XML replaced), split
+            # at base_offset=0, so its fragment spans are payload-relative and do
+            # NOT map to original record bytes. Anchor every stripped fragment to
+            # the ORIGINAL section span so all emitted byte offsets — both the
+            # source_start/end fields and the metadata spans — stay in one
+            # record-absolute coordinate system.
             start_byte, end_byte = original_span
+            spans = [[start_byte, end_byte]]
         else:
             start_byte = fragment.spans[0].start_byte
             end_byte = fragment.spans[-1].end_byte
+            spans = [[s.start_byte, s.end_byte] for s in fragment.spans]
 
         partials.append({
             "content": raw_document,
             "content_html": (html_for or _render_markdown_html)(body_text)
                             if body_text.strip() else "",
             "s6_header": header.text,
-            "source_token_count": tokenizer.count(payload),
+            "source_token_count": source_token_count,
             "content_token_count": tokenizer.count(raw_document),
             "embedding_token_count": embedding_tokens,
             "source_record_id": record_id,
@@ -182,7 +203,7 @@ def _chunk_section(*, source_type, title, breadcrumb, heading_display, payload,
                 "fence_open": fragment.synthetic.get("fence_open"),
                 "fence_close": fragment.synthetic.get("fence_close"),
                 "stripped_xml": stripped_xml,
-                "spans": [[s.start_byte, s.end_byte] for s in fragment.spans],
+                "spans": spans,
             },
             "token_estimate": estimate_tokens(raw_document),
         })

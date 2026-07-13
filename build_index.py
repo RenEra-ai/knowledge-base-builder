@@ -537,6 +537,10 @@ def build_manifest_v2(chunks, args, embedding_dim, candidate,
 
     manifest = build_manifest(chunks, args, embedding_dim)
     manifest["schema_version"] = MANIFEST_SCHEMA_VERSION_V2
+    # Candidate builds embed with the pinned MODEL_ID regardless of --model, so
+    # the top-level embedding_model must report the model that actually ran —
+    # the serving resolver requires embedding_model == embedding_contract.model_id.
+    manifest["embedding_model"] = MODEL_ID
     manifest["embedding_contract"] = {
         "version": 1,
         "model_id": MODEL_ID,
@@ -809,17 +813,26 @@ def main():
         embedding_dim = get_embedding_dim(ef)
     else:
         # Explicit pinned embeddings: the exact model revision the manifest
-        # contract declares, raw documents stored, vectors supplied by us.
+        # contract declares, raw documents stored, vectors supplied by us. The
+        # embedding function is constructed IDENTICALLY to the serving side
+        # (model_name + revision + normalize) so the config Chroma persists in
+        # the collection matches what get_collection is later handed — without
+        # it Chroma would persist its default EF and serving would raise an
+        # embedding-function conflict, and --verify would embed its smoke
+        # queries with the wrong model. Reusing ef._model for encode also
+        # avoids loading the pinned weights twice.
         from kb_tokenizer import (
             MAX_SEQ_TOKENS,
             MODEL_ID,
             MODEL_REVISION,
             HFWordPieceTokenizer,
         )
-        from sentence_transformers import SentenceTransformer
 
         print(f"\nInitializing pinned embedding model: {MODEL_ID}@{MODEL_REVISION[:7]}")
-        model = SentenceTransformer(MODEL_ID, revision=MODEL_REVISION)
+        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=MODEL_ID, revision=MODEL_REVISION, normalize_embeddings=False,
+        )
+        model = ef._model
         if model.max_seq_length != MAX_SEQ_TOKENS:
             print(f"FAILED: loaded model max_seq_length {model.max_seq_length} "
                   f"!= contract {MAX_SEQ_TOKENS}")
@@ -838,17 +851,14 @@ def main():
     except Exception:
         pass
 
-    if candidate == "c0":
-        collection = client.create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=ef,
-            metadata={"hnsw:space": "cosine"},
-        )
-    else:
-        collection = client.create_collection(
-            name=COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
-        )
+    # Both paths persist a SentenceTransformer EF so a reopened collection
+    # binds the same embedder identity; candidate builds additionally supply
+    # explicit pinned vectors on add().
+    collection = client.create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=ef,
+        metadata={"hnsw:space": "cosine"},
+    )
 
     print(f"\nBuilding index (batch size {args.batch_size})...")
     start = time.time()
