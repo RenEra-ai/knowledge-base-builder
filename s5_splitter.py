@@ -453,13 +453,86 @@ class _Splitter:
         for i, (content_start, content_end, syn_open, syn_close) in enumerate(self._finished):
             span_start = 0 if i == 0 else content_start
             span_end = self._finished[i + 1][0] if i + 1 < len(self._finished) else total_chars
+            raw_lines = self._payload[content_start:content_end].split("\n")
+            syn_open, syn_close = _safe_fence_wrappers(raw_lines, syn_open, syn_close)
             fragments.append(Fragment(
-                raw_lines=self._payload[content_start:content_end].split("\n"),
+                raw_lines=raw_lines,
                 spans=[SourceSpan(self._base + self._byte_of[span_start],
                                   self._base + self._byte_of[span_end])],
                 synthetic={"fence_open": syn_open, "fence_close": syn_close},
             ))
         return fragments
+
+
+def _fence_open_of(line):
+    """(char, run_length) if ``line`` is a fence marker (>=3 backticks/tildes),
+    else None. Distinguishes open (any info) from a bare closer at the caller."""
+    stripped = line.strip()
+    if not stripped or stripped[0] not in "`~":
+        return None
+    char = stripped[0]
+    run = len(stripped) - len(stripped.lstrip(char))
+    return (char, run) if run >= 3 else None
+
+
+def _fragment_is_balanced(lines):
+    """True if ``lines`` (a fragment's rendered open+content+close) form valid,
+    balanced fenced Markdown: every open fence is closed by a bare same-char run
+    of at least its length, with no dangling open."""
+    open_fence = None  # (char, length)
+    for line in lines:
+        marker = _fence_open_of(line)
+        if marker is None:
+            continue
+        char, run = marker
+        stripped = line.strip()
+        bare = stripped[run:].strip() == ""
+        if open_fence is None:
+            open_fence = (char, run)
+        elif char == open_fence[0] and run >= open_fence[1] and bare:
+            open_fence = None
+        # a longer/other run while open is body — ignored
+    return open_fence is None
+
+
+def _safe_fence_wrappers(raw_lines, syn_open, syn_close):
+    """Ensure a fragment renders as balanced fenced Markdown, lengthening ONLY
+    the synthetic wrapper markers when needed.
+
+    A codepoint-split of a minified code line can leave a bare fence-marker run
+    in the content; wrapped in an equal-length synthetic fence it would close it
+    prematurely. When the fragment as rendered is unbalanced, grow the synthetic
+    marker(s) — same char, language preserved, source lines untouched — until it
+    balances. A fragment that is already balanced (the common case, e.g. a
+    source fence delimiter paired with an equal-length synthetic marker) is left
+    exactly as-is.
+    """
+    if syn_open is None and syn_close is None:
+        return syn_open, syn_close
+    char = (syn_open or syn_close)[0]
+
+    def render(open_marker, close_marker):
+        lines = []
+        if open_marker is not None:
+            lines.append(open_marker)
+        lines.extend(raw_lines)
+        if close_marker is not None:
+            lines.append(close_marker)
+        return lines
+
+    open_len = (len(syn_open) - len(syn_open.lstrip(char))) if syn_open else 0
+    close_len = (len(syn_close) - len(syn_close.lstrip(char))) if syn_close else 0
+    language = syn_open.lstrip(char) if syn_open else ""
+    length = max(open_len, close_len, 3)
+    # Bounded growth: the longest bare run in the content caps how long a
+    # wrapper could ever need to be, so this terminates well before the guard.
+    for _ in range(max(len(ln) for ln in raw_lines) + 2 if raw_lines else 1):
+        new_open = char * length + language if syn_open is not None else None
+        new_close = char * length if syn_close is not None else None
+        if _fragment_is_balanced(render(new_open, new_close)):
+            return new_open, new_close
+        length += 1
+    return new_open, new_close
 
 
 def split_payload(payload, *, base_offset, budget_fn, tokenizer, source_path):

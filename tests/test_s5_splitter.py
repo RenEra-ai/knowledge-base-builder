@@ -243,6 +243,24 @@ def test_minified_line_splits_at_codepoint_boundary_multibyte():
         assert frag.synthetic["fence_open"] == (None if frag is frags[0] else "```")
 
 
+def test_synthetic_wrapper_lengthens_past_a_bare_marker_run():
+    """A fenced body line that codepoint-splits into a bare fence-marker run
+    must not close its synthetic wrapper — the wrapper is lengthened past the
+    run (CommonMark-correct), keeping every fragment valid without altering a
+    source byte. Reachable only at pathologically tiny budgets, but a stated
+    hard invariant."""
+    payload = "```\n````x"  # 3-backtick open, body line begins with a 4-run
+    frags = _split(payload, budget=1)
+    for frag in frags:
+        _assert_fences_balanced(frag)
+    # The fragment carrying the bare 4-backtick run wraps it in a >=5 fence.
+    wrapped = [f for f in frags if "````" in f.raw_lines]
+    assert wrapped
+    for frag in wrapped:
+        marker = frag.synthetic["fence_open"] or frag.synthetic["fence_close"]
+        assert marker.count("`") >= 5
+
+
 def test_oversized_fence_marker_prefixed_line_stays_balanced():
     """Regression: an oversized minified code line that BEGINS with a fence-
     marker run must not be codepoint-split onto the fence-open fragment — a
