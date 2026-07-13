@@ -16,6 +16,8 @@ Target matching resolves a target to the CHUNKS that carry its content by frozen
 """
 import base64
 import binascii
+import contextlib
+import io
 import json
 import os
 
@@ -208,7 +210,12 @@ def run_holdout(service, holdout_rows, chunks, top_k=DEFAULT_TOP_K):
     """
     results = {"top_k": top_k, "queries": {}}
     for row in holdout_rows:
-        response = service.search(row["query"], top_k)
+        # KbService.search prints an [INFO] line containing the query text; the
+        # sealed holdout must never leak its queries to stdout, so capture and
+        # discard anything the search emits.
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            response = service.search(row["query"], top_k)
         hits = response.get("hits", [])
         groups = []
         for index, target in enumerate(row["targets"]):

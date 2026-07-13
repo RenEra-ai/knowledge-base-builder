@@ -228,13 +228,28 @@ def test_run_holdout_marks_miss_when_no_hit_maps_to_a_target_chunk():
     assert group == {"index": 0, "rank": None, "distance": None, "hit": False}
 
 
+class _LeakyKbService(FakeKbService):
+    """A service that PRINTS the query on every search, exactly like the pinned
+    KbService.search's `[INFO] search_boomi_docs query=...` line. run_holdout
+    must suppress it so the sealed holdout query text never reaches stdout."""
+
+    def search(self, query, top_k=None, source_type=None):
+        import sys as _sys
+
+        print(f"[INFO] search_boomi_docs query={query!r} top_k={top_k}")
+        print(f"[WARNING] {query!r} noisy", file=_sys.stderr)
+        return super().search(query, top_k, source_type)
+
+
 def test_run_holdout_redacts_query_text(capsys):
     secret = "SECRET-HOLDOUT-QUERY-TEXT-42"
     chunks = [_chunk("c1", "rec-A", 0, 100)]
     row = {"query_id": "H1", "query": secret, "family": SDP_FAMILY,
            "targets": [{"source_record_id": "rec-A",
                         "anchor": {"start_byte": 10, "end_byte": 20}}]}
-    service = FakeKbService({secret: [_hit("c1", 0.30)]})
+    # A LEAKY service (prints the query like the real KbService) must still not
+    # leak to stdout/stderr through run_holdout.
+    service = _LeakyKbService({secret: [_hit("c1", 0.30)]})
     results = run_holdout(service, [row], chunks)
     captured = capsys.readouterr()
     assert secret not in captured.out
