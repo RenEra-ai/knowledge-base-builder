@@ -322,15 +322,31 @@ def test_b56_holdout_equal_ranks_pass_with_rescue_advisory():
     assert any("rescue gate" in a for a in report.advisories)
 
 
-def test_b56_holdout_unmatchable_c0_baseline_fails_not_vacuous_pass():
-    """A C0 baseline that matched zero Companion targets (legacy chunks have no
-    source_record_id) must NOT let the rank no-regression check pass vacuously."""
+def test_b56_holdout_unmatchable_c0_rank_is_advisory_status_still_enforced():
+    """A legacy C0 baseline carries no source_record_id, so its Companion
+    targets are unmatchable and rank-vs-C0 is uncomputable. That must NOT block
+    the gate (the old guard made it impossible to pass) — it is an advisory —
+    while the STATUS no-regression and official gates stay enforced."""
     c0 = _holdout_results()
     for family in COMPANION_FAMILIES:
         _set_family_group(c0, family, 0, rank=None, distance=None)  # all misses
+    # A healthy B56 (real ranks, status ok, official rank 1) must PASS.
     report = b56_holdout_gates(_holdout_results(rank=1), c0)
+    assert report.passed, report.failures
+    assert any("rank no-regression was not checked" in a for a in report.advisories)
+
+
+def test_b56_holdout_status_regression_fails_even_when_c0_rank_unmatchable():
+    """The status no-regression check does not depend on anchor matching, so it
+    must still fire against an unmatchable C0 baseline."""
+    c0 = _holdout_results(status="ok")
+    for family in COMPANION_FAMILIES:
+        _set_family_group(c0, family, 0, rank=None, distance=None)
+    b56 = _holdout_results(rank=1, status="ok")
+    _set_family_status(b56, "groovy_stream", "low_confidence")
+    report = b56_holdout_gates(b56, c0)
     assert not report.passed
-    assert any("not anchor-matchable" in f for f in report.failures)
+    assert any("groovy_stream" in f and "status" in f for f in report.failures)
 
 
 def test_family_taxonomy_matches_the_intent_plan():

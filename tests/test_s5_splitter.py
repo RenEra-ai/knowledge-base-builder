@@ -200,23 +200,22 @@ def test_oversized_code_line_splits_at_whitespace_boundary():
     whitespace boundary that fits; every resulting fragment is a valid fenced
     block and the consumed boundary space rides in the preceding span.
 
-    The oversized line's leading words BACKFILL the open fragment ("alpha"
-    completes fragment 0 to its 5-token budget) rather than stranding its room
-    — see test_descent_backfills_the_open_fragment.
+    An oversized code line descends on a FRESH fragment (the code path closes
+    before descending so a fence-marker prefix can't be stranded onto the
+    fence-open fragment — see test_oversized_fence_marker_prefixed_line_stays_balanced).
     """
     payload = "```\nfoo bar\nalpha beta gamma delta\n```"
     frags = _split(payload, budget=5)
     assert [f.raw_lines for f in frags] == [
-        ["```", "foo bar", "alpha"],
-        ["beta gamma delta"],
-        ["```"],
+        ["```", "foo bar"],
+        ["alpha beta gamma"],
+        ["delta", "```"],
     ]
     assert frags[0].synthetic == {"fence_open": None, "fence_close": "```"}
     assert frags[1].synthetic == {"fence_open": "```", "fence_close": "```"}
     assert frags[2].synthetic == {"fence_open": "```", "fence_close": None}
-    # The space after "alpha" is consumed at the boundary -> preceding span.
-    assert frags[0].spans == [SourceSpan(0, 18)]
-    assert frags[1].spans == [SourceSpan(18, 35)]
+    # The space after "gamma" is consumed at the boundary -> preceding span.
+    assert frags[1].spans == [SourceSpan(12, 29)]
     for frag in frags:
         _assert_fences_balanced(frag)
 
@@ -228,19 +227,34 @@ def test_minified_line_splits_at_codepoint_boundary_multibyte():
     and the byte offsets land on exact 4-byte emoji multiples."""
     payload = "```\n" + "\U0001f680" * 24 + "\n```"   # rocket line = 6 pieces
     frags = _split(payload, budget=3, base_offset=200)
-    # The fence-open line and the first 8 rockets share fragment 0 (3 pieces);
-    # the closing fence rides with the trailing 4 rockets.
+    # The oversized rocket line descends on a FRESH fragment (12 rockets = 3
+    # pieces each); the fence-open and -close lines sit in their own fragments.
     assert [f.raw_lines for f in frags] == [
-        ["```", "\U0001f680" * 8],
+        ["```"],
         ["\U0001f680" * 12],
-        ["\U0001f680" * 4, "```"],
+        ["\U0001f680" * 12],
+        ["```"],
     ]
     # UTF-8 offsets: "```\n" = 4 bytes, each rocket = 4 bytes, "\n" = 1.
-    assert frags[0].spans == [SourceSpan(200, 200 + 4 + 32)]
-    assert frags[1].spans == [SourceSpan(200 + 36, 200 + 36 + 48)]
+    assert frags[1].spans == [SourceSpan(200 + 4, 200 + 4 + 48)]
+    assert frags[2].spans == [SourceSpan(200 + 52, 200 + 52 + 48 + 1)]  # + closing "\n"
     for frag in frags:
         _assert_fences_balanced(frag)
         assert frag.synthetic["fence_open"] == (None if frag is frags[0] else "```")
+
+
+def test_oversized_fence_marker_prefixed_line_stays_balanced():
+    """Regression: an oversized minified code line that BEGINS with a fence-
+    marker run must not be codepoint-split onto the fence-open fragment — a
+    small remaining budget could strand a bare marker prefix that closes the
+    fence early and emits invalid Markdown. Descend on a fresh fragment."""
+    payload = "````py\n````longtoken\nemoji a alpha.\n````"
+    frags = _split(payload, budget=3)
+    for frag in frags:
+        _assert_fences_balanced(frag)
+    # The oversized body line splits at a non-bare-marker boundary.
+    assert not any(frag.raw_lines and frag.raw_lines[0] == "````"
+                   for frag in frags), "a bare fence marker was stranded as content"
 
 
 def test_descent_backfills_the_open_fragment_instead_of_stranding_it():

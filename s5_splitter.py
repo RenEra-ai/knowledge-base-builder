@@ -369,6 +369,13 @@ class _Splitter:
                         self._base + self._byte_of[line_end],
                         reason="fence marker line is atomic",
                     )
+                # Close before descending an oversized code line so its
+                # codepoint split starts on a FRESH fragment with the full
+                # budget. Backfilling it onto a fragment already holding the
+                # fence-open line could strand a bare fence-marker prefix
+                # (a small remaining budget cuts exactly at the marker run),
+                # which would close the fence early and emit invalid Markdown.
+                self._close()
                 self._place_prose(line_start, line_end, len(_PROSE_SEPARATORS) - 1)
             if kind == "open":
                 self._in_fence = (marker, language)
