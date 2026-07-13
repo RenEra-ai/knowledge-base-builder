@@ -20,9 +20,37 @@ on:
         type: choice
         options: [c0, b5, b56, b567]
         default: c0
+      mode:
+        description: >-
+          freeze = scrape + freeze the source snapshot and upload it as an
+          artifact, then stop (build no candidate); build = chunk + build a
+          candidate (optionally reusing a previously frozen snapshot)
+        type: choice
+        options: [build, freeze]
+        default: build
+      snapshot_run_id:
+        description: >-
+          Run id of a previous 'freeze' dispatch. When set, the build downloads
+          that run's kb25-source-snapshot artifact and SKIPS scraping, so every
+          candidate is built from byte-identical sources. Empty scrapes fresh.
+        type: string
+        default: ''
+      publish:
+        description: >-
+          Publish a GitHub release from the built artifact. Off by default so
+          candidates can be built and evaluated without cutting a release.
+        type: boolean
+        default: false
+      release_tag:
+        description: >-
+          Release tag to publish under (e.g. kb-25). Empty falls back to
+          kb-<run_number>. Only used when publish is true.
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,6 +58,7 @@ concurrency:
 
 jobs:
   prepare-config:
+    if: inputs.snapshot_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -63,6 +92,7 @@ jobs:
         retention-days: 7
 
   scrape:
+    if: inputs.snapshot_run_id == ''
     needs: prepare-config
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -113,7 +143,7 @@ jobs:
         retention-days: 7
 
   scrape-report:
-    if: always()
+    if: always() && inputs.snapshot_run_id == ''
     needs: [prepare-config, scrape]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -150,6 +180,10 @@ jobs:
 
   build-artifact:
     needs: scrape
+    # Run on a successful fresh scrape, or on any snapshot-reuse dispatch (where
+    # scrape is intentionally skipped). Stays fail-closed if scrape is skipped
+    # for any other reason (e.g. a prepare-config failure) — no shard artifacts.
+    if: always() && (needs.scrape.result == 'success' || inputs.snapshot_run_id != '')
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
@@ -171,20 +205,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Download scrape artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: knowledge-base-shard-*
-        path: artifacts
-        merge-multiple: true
-
     - name: Validate pipeline/candidate combination
+      if: inputs.mode != 'freeze'
       run: |
         # The two inputs are orthogonal in the form but not independent: the
         # legacy pipeline only ever builds the c0 baseline, and the s5 pipeline
         # cannot build c0 (build_index rejects S5 chunks under c0). Fail fast
         # with a clear message rather than produce a mislabeled artifact.
-        if [ "${{ inputs.pipeline }}" = "legacy" ] && [ "${{ inputs.candidate }}" != "c0" ]; then
+        if [ "${{ inputs.pipeline }}" = "legacy" ] && [ -n "${{ inputs.candidate }}" ] && [ "${{ inputs.candidate }}" != "c0" ]; then
           echo "::error::pipeline=legacy only builds candidate c0; got '${{ inputs.candidate }}'"
           exit 1
         fi
@@ -193,14 +221,29 @@ jobs:
           exit 1
         fi
 
+    # --- fresh-scrape path (no snapshot reuse) --------------------------------
+
+    - name: Download scrape artifacts
+      if: inputs.snapshot_run_id == ''
+      uses: actions/download-artifact@v4
+      with:
+        pattern: knowledge-base-shard-*
+        path: artifacts
+        merge-multiple: true
+
     - name: Assemble knowledge base
+      if: inputs.snapshot_run_id == ''
       run: python assemble_scrape_artifacts.py --artifacts-dir artifacts --output-dir knowledge_base --failed-urls-output combined_failed_urls.txt
 
     - name: Fetch companion sources
+      if: inputs.snapshot_run_id == ''
       run: python fetch_companion.py --config companion_sources.json --staging companion_sources --manifest companion_manifest.json
 
     - name: Freeze source snapshot
-      if: inputs.pipeline == 's5'
+      # Freeze whenever we scraped fresh AND a snapshot is needed downstream:
+      # freeze mode (the deliverable) or any s5 candidate build. The legacy
+      # weekly build (mode/pipeline unset on schedule) keeps chunking directly.
+      if: inputs.snapshot_run_id == '' && (inputs.mode == 'freeze' || inputs.pipeline == 's5')
       run: |
         python snapshot.py freeze \
           --official knowledge_base/ \
@@ -211,26 +254,72 @@ jobs:
         SNAP=$(python snapshot.py verify --snapshot source_snapshot/ | awk '/source_snapshot_sha256/ {print $2}')
         echo "SOURCE_SNAPSHOT_SHA256=$SNAP" >> "$GITHUB_ENV"
 
-    - name: Chunk documents (legacy)
-      if: inputs.pipeline != 's5'
+    # --- snapshot-reuse path --------------------------------------------------
+
+    - name: Download frozen snapshot
+      if: inputs.snapshot_run_id != ''
+      uses: actions/download-artifact@v4
+      with:
+        name: kb25-source-snapshot
+        path: .
+        run-id: ${{ inputs.snapshot_run_id }}
+        github-token: ${{ github.token }}
+
+    - name: Unpack and verify reused snapshot
+      if: inputs.snapshot_run_id != ''
       run: |
-        python chunk_docs.py --verbose \
-          --companion-input companion_sources \
-          --companion-manifest companion_manifest.json
+        tar -xzf source_snapshot.tar.gz
+        SNAP=$(python snapshot.py verify --snapshot source_snapshot/ | awk '/source_snapshot_sha256/ {print $2}')
+        echo "SOURCE_SNAPSHOT_SHA256=$SNAP" >> "$GITHUB_ENV"
+
+    # --- freeze mode: publish the snapshot as the deliverable, then stop ------
+
+    - name: Package frozen snapshot
+      if: inputs.mode == 'freeze'
+      run: tar -czf source_snapshot.tar.gz source_snapshot/
+
+    - name: Upload frozen snapshot artifact
+      if: inputs.mode == 'freeze'
+      uses: actions/upload-artifact@v4
+      with:
+        name: kb25-source-snapshot
+        path: source_snapshot.tar.gz
+        retention-days: 90
+
+    - name: Report frozen snapshot sha
+      if: inputs.mode == 'freeze'
+      run: |
+        echo "### Frozen source snapshot" >> "$GITHUB_STEP_SUMMARY"
+        echo "- run id (reuse via snapshot_run_id): ${{ github.run_id }}" >> "$GITHUB_STEP_SUMMARY"
+        echo "- source_snapshot_sha256: ${SOURCE_SNAPSHOT_SHA256}" >> "$GITHUB_STEP_SUMMARY"
+
+    # --- build mode: chunk + index -------------------------------------------
+
+    - name: Chunk documents (legacy)
+      if: inputs.mode != 'freeze' && inputs.pipeline != 's5'
+      run: |
+        if [ -n "${{ inputs.snapshot_run_id }}" ]; then
+          # C0 built from the same frozen bytes as the S5 candidates.
+          python chunk_docs.py --verbose --snapshot source_snapshot/
+        else
+          python chunk_docs.py --verbose \
+            --companion-input companion_sources \
+            --companion-manifest companion_manifest.json
+        fi
 
     - name: Chunk documents (S5)
-      if: inputs.pipeline == 's5'
+      if: inputs.mode != 'freeze' && inputs.pipeline == 's5'
       run: python s5_pipeline.py --snapshot source_snapshot/ --output chunks.jsonl
 
-    - name: Build semantic index
-      if: inputs.pipeline != 's5'
+    - name: Build semantic index (legacy)
+      if: inputs.mode != 'freeze' && inputs.pipeline != 's5'
       run: |
         python build_index.py --verify \
           --artifact-tag "kb-${{ github.run_number }}" \
           --builder-commit "${{ github.sha }}"
 
     - name: Build semantic index (candidate)
-      if: inputs.pipeline == 's5'
+      if: inputs.mode != 'freeze' && inputs.pipeline == 's5'
       run: |
         EXTRA=""
         if [ "${{ inputs.candidate }}" = "b567" ]; then
@@ -245,12 +334,21 @@ jobs:
           $EXTRA
 
     - name: Bundle failed URL report
-      run: cp combined_failed_urls.txt boomi_knowledge_db/_failed_urls.txt
+      if: inputs.mode != 'freeze'
+      run: |
+        if [ -f combined_failed_urls.txt ]; then
+          cp combined_failed_urls.txt boomi_knowledge_db/_failed_urls.txt
+        else
+          echo "reused snapshot ${{ inputs.snapshot_run_id }}: failed-URL report not carried in the snapshot" \
+            > boomi_knowledge_db/_failed_urls.txt
+        fi
 
     - name: Package artifact
+      if: inputs.mode != 'freeze'
       run: tar -czf boomi_knowledge_db.tar.gz boomi_knowledge_db/
 
     - name: Upload workflow artifact
+      if: inputs.mode != 'freeze'
       uses: actions/upload-artifact@v4
       with:
         name: boomi-knowledge-db
@@ -258,7 +356,7 @@ jobs:
         retention-days: 90
 
     - name: Build release notes
-      if: github.event_name == 'workflow_dispatch'
+      if: github.event_name == 'workflow_dispatch' && inputs.publish == true && inputs.mode != 'freeze'
       run: |
         python - <<'EOF'
         import json, os
@@ -306,11 +404,11 @@ jobs:
         EOF
 
     - name: Create GitHub release
-      if: github.event_name == 'workflow_dispatch'
+      if: github.event_name == 'workflow_dispatch' && inputs.publish == true && inputs.mode != 'freeze'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: kb-${{ github.run_number }}
-        name: Knowledge Base Build ${{ github.run_number }}
+        tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || format('kb-{0}', github.run_number) }}
+        name: Knowledge Base Build ${{ inputs.release_tag != '' && inputs.release_tag || github.run_number }}
         files: boomi_knowledge_db.tar.gz
         body_path: release_notes.md
         generate_release_notes: true
