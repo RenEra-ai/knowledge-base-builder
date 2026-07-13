@@ -221,6 +221,12 @@ def _add_unique(values, value):
         values.append(value)
 
 
+def chunk_identifiers(chunk):
+    """Chunk-shaped adapter for the ``identifiers_fn`` seam (s7_cache takes a
+    chunk dict; the extractor takes text)."""
+    return extract_structural_identifiers(chunk["content"])
+
+
 # --- eligibility -----------------------------------------------------------------
 
 def is_eligible(chunk, tokenizer):

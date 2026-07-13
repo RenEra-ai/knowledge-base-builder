@@ -35,8 +35,26 @@ DEFAULT_MODEL = "all-MiniLM-L6-v2"
 BATCH_SIZE = 200
 COLLECTION_NAME = "boomi_docs"
 MANIFEST_SCHEMA_VERSION = "1"
+MANIFEST_SCHEMA_VERSION_V2 = "2"
 BUILDER_VERSION = "0.1.0"
 VERIFY_MAX_DISTANCE = 0.45
+
+# kb-25 candidate builds. c0 is the legacy path (implicit Chroma embeddings,
+# schema-v1 manifest); b5/b56/b567 consume S5 chunk records and pass EXPLICIT
+# pinned-revision embeddings. Only the release candidates (b56/b567) emit a
+# schema-v2 manifest with the embedding contract; b5 is eval-only and stays
+# legacy-shaped (its headerless raw-fragment text IS the raw-v1 contract the
+# serving side maps schema-v1 manifests to).
+CANDIDATES = ("c0", "b5", "b56", "b567")
+EMBEDDING_TEXT_VERSIONS = {"b56": "s5-s6-v1", "b567": "s5-s6-s7-v1"}
+
+# The S5 chunk fields (beyond the legacy 15-field contract). Presence of
+# source_record_id marks an S5 chunk; then the whole set is required.
+S5_REQUIRED_FIELDS = (
+    "source_token_count", "content_token_count", "embedding_token_count",
+    "source_record_id", "source_start_byte", "source_end_byte",
+    "synthetic_wrapper_metadata", "s6_header",
+)
 
 # Fields every chunk must carry once chunk_docs.py has run. source_type and
 # verification_status are the load-bearing provenance labels (always populated,
@@ -140,6 +158,15 @@ def validate_chunks(chunks):
                         f"chunk {i} ({chunk.get('id')!r}) official chunk must leave {field!r} blank"
                     )
 
+        # S5 chunk records (marked by source_record_id) must carry the whole
+        # S5 field set with valid types — a partial record would embed with
+        # wrong budgets or break span-based holdout matching downstream.
+        if "source_record_id" in chunk:
+            errors.extend(
+                f"chunk {i} ({chunk.get('id')!r}) S5 chunk: {problem}"
+                for problem in _s5_field_errors(chunk)
+            )
+
     by_page = {}
     for chunk in chunks:
         if not isinstance(chunk, dict):
@@ -157,6 +184,35 @@ def validate_chunks(chunks):
     return errors
 
 
+def _s5_field_errors(chunk):
+    """Type/consistency problems in one S5 chunk's added fields."""
+    problems = []
+    missing = [f for f in S5_REQUIRED_FIELDS if f not in chunk]
+    if missing:
+        return [f"missing S5 field(s): {missing}"]
+
+    def _is_count(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    for field in ("source_token_count", "content_token_count",
+                  "embedding_token_count", "source_start_byte", "source_end_byte"):
+        if not _is_count(chunk[field]):
+            problems.append(f"{field!r} must be a non-negative int, got {chunk[field]!r}")
+    if (_is_count(chunk["source_start_byte"]) and _is_count(chunk["source_end_byte"])
+            and chunk["source_end_byte"] < chunk["source_start_byte"]):
+        problems.append(
+            f"source_end_byte {chunk['source_end_byte']} precedes "
+            f"source_start_byte {chunk['source_start_byte']}"
+        )
+    if not isinstance(chunk["source_record_id"], str) or not chunk["source_record_id"]:
+        problems.append("'source_record_id' must be a non-empty string")
+    if not isinstance(chunk["synthetic_wrapper_metadata"], dict):
+        problems.append("'synthetic_wrapper_metadata' must be an object")
+    if not isinstance(chunk["s6_header"], str):
+        problems.append("'s6_header' must be a string (empty is legal)")
+    return problems
+
+
 def load_chunks(jsonl_path):
     """Load all chunks from a JSONL file."""
     chunks = []
@@ -168,6 +224,49 @@ def load_chunks(jsonl_path):
     return chunks
 
 
+def chunk_metadata(chunk):
+    """The per-chunk Chroma metadata (scalars only).
+
+    Legacy chunks keep the frozen 15-key shape byte-for-byte. S5 chunks add
+    their token counts, source-record span, JSON-encoded wrapper metadata, and
+    header text (Chroma metadata must be scalars, hence the JSON string).
+    """
+    meta = {
+        "title": chunk["title"],
+        "section_heading": chunk["section_heading"],
+        "breadcrumb": chunk["breadcrumb"],
+        "source_url": chunk["source_url"],
+        "page_key": chunk["page_key"],
+        "chunk_index": chunk["chunk_index"],
+        "category": chunk["category"],
+        "token_estimate": chunk["token_estimate"],
+        # Provenance (empty strings for official docs). Chroma metadata
+        # must be scalars, so default missing values to "" not None.
+        "source_type": chunk.get("source_type", OFFICIAL_SOURCE_TYPE),
+        "verification_status": chunk.get("verification_status", OFFICIAL_VERIFICATION_STATUS),
+        "upstream_repo": chunk.get("upstream_repo", ""),
+        "upstream_commit": chunk.get("upstream_commit", ""),
+        "source_path": chunk.get("source_path", ""),
+        "raw_url": chunk.get("raw_url", ""),
+        "latest_url": chunk.get("latest_url", ""),
+    }
+    if "source_record_id" in chunk:
+        meta.update({
+            "source_token_count": chunk["source_token_count"],
+            "content_token_count": chunk["content_token_count"],
+            "embedding_token_count": chunk["embedding_token_count"],
+            "source_record_id": chunk["source_record_id"],
+            "source_start_byte": chunk["source_start_byte"],
+            "source_end_byte": chunk["source_end_byte"],
+            "synthetic_wrapper_metadata": json.dumps(
+                chunk["synthetic_wrapper_metadata"], ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "s6_header": chunk["s6_header"],
+        })
+    return meta
+
+
 def build_index(chunks, collection, batch_size, verbose):
     """Add all chunks to the ChromaDB collection in batches."""
     total = len(chunks)
@@ -176,31 +275,110 @@ def build_index(chunks, collection, batch_size, verbose):
         collection.add(
             ids=[c["id"] for c in batch],
             documents=[c["content"] for c in batch],
-            metadatas=[{
-                "title": c["title"],
-                "section_heading": c["section_heading"],
-                "breadcrumb": c["breadcrumb"],
-                "source_url": c["source_url"],
-                "page_key": c["page_key"],
-                "chunk_index": c["chunk_index"],
-                "category": c["category"],
-                "token_estimate": c["token_estimate"],
-                # Provenance (empty strings for official docs). Chroma metadata
-                # must be scalars, so default missing values to "" not None.
-                "source_type": c.get("source_type", OFFICIAL_SOURCE_TYPE),
-                "verification_status": c.get("verification_status", OFFICIAL_VERIFICATION_STATUS),
-                "upstream_repo": c.get("upstream_repo", ""),
-                "upstream_commit": c.get("upstream_commit", ""),
-                "source_path": c.get("source_path", ""),
-                "raw_url": c.get("raw_url", ""),
-                "latest_url": c.get("latest_url", ""),
-            } for c in batch],
+            metadatas=[chunk_metadata(c) for c in batch],
         )
         indexed = min(i + batch_size, total)
         print(f"  Indexed {indexed}/{total} chunks")
 
         if verbose:
             print(f"    Last batch: {batch[-1]['id']}")
+
+
+# --- candidate embedding inputs (B5/B56/B567) ----------------------------------
+
+def b56_embedding_input(chunk):
+    """B56 embedding text: deduplicated S6 header + raw document (header may
+    be legally empty after deduplication, then the raw document embeds alone)."""
+    header = chunk.get("s6_header", "")
+    return header + "\n" + chunk["content"] if header else chunk["content"]
+
+
+def embedding_input_for(chunk, candidate, tokenizer=None, s7=None):
+    """The (embedding_text, embedding_source) one chunk contributes.
+
+    b567 semantics (intent plan): official chunks and non-eligible companion
+    chunks always embed the B56 input; an eligible companion chunk embeds its
+    validated description (status ok) or the EXACT B56 input (raw_fallback) —
+    so any B567-vs-B56 regression is attributable to successful description
+    vectors, never to fallback behavior. ``s7`` carries {"cache", "contract",
+    "identifiers_fn"} for the cache-key lookup.
+    """
+    if candidate in ("c0", "b5"):
+        return chunk["content"], "raw"
+    if candidate == "b56":
+        return b56_embedding_input(chunk), "raw"
+    if candidate != "b567":
+        raise ValueError(f"unknown candidate: {candidate!r}")
+
+    if chunk.get("source_type") != COMPANION_SOURCE_TYPE:
+        return b56_embedding_input(chunk), "raw"
+
+    from s7_eligibility import is_eligible
+
+    if not is_eligible(chunk, tokenizer):
+        return b56_embedding_input(chunk), "raw"
+
+    from s7_cache import chunk_cache_key
+
+    key = chunk_cache_key(chunk, s7["contract"], s7["identifiers_fn"])
+    record = s7["cache"].get(key)
+    if record is None:
+        raise ValueError(
+            f"S7 cache entry missing for eligible chunk {chunk['id']!r} "
+            f"(key {key}) — release builds never call an LLM; generate the "
+            "cache first"
+        )
+    if record["status"] == "ok":
+        return record["description"], "description"
+    return b56_embedding_input(chunk), "raw_fallback"
+
+
+def assert_embedding_inputs_within_budget(plan, tokenizer):
+    """Hard rule: every final embedding input fits the model window
+    (model-side truncation is forbidden). Raises naming every offender."""
+    from kb_tokenizer import EFFECTIVE_BUDGET
+
+    offenders = []
+    for item in plan:
+        count = tokenizer.count(item["embedding_input"])
+        if count > EFFECTIVE_BUDGET:
+            offenders.append(f"{item['id']} ({count} WordPieces)")
+    if offenders:
+        raise ValueError(
+            f"{len(offenders)} embedding input(s) exceed the "
+            f"{EFFECTIVE_BUDGET}-WordPiece budget: {offenders[:5]}"
+        )
+
+
+def compute_embedding_plan(chunks, candidate, tokenizer, s7=None):
+    """Per-chunk embedding plan: id, stored document (ALWAYS the raw document),
+    embedding input, embedding source, and the Chroma metadata (annotated with
+    the source, plus description/contract hash where a description is used).
+    Asserts every input fits the token budget."""
+    plan = []
+    contract_sha = None
+    if s7 is not None:
+        from s7_cache import generator_contract_sha256
+
+        contract_sha = generator_contract_sha256(s7["contract"])
+    for chunk in chunks:
+        text, source = embedding_input_for(chunk, candidate, tokenizer=tokenizer,
+                                           s7=s7)
+        meta = chunk_metadata(chunk)
+        meta["embedding_source"] = source
+        if source == "description":
+            meta["description"] = text
+        if contract_sha and chunk.get("source_type") == COMPANION_SOURCE_TYPE:
+            meta["generator_contract_sha256"] = contract_sha
+        plan.append({
+            "id": chunk["id"],
+            "document": chunk["content"],
+            "embedding_input": text,
+            "embedding_source": source,
+            "metadata": meta,
+        })
+    assert_embedding_inputs_within_budget(plan, tokenizer)
+    return plan
 
 
 def verify_index(collection, max_distance=VERIFY_MAX_DISTANCE, queries=None):
@@ -340,6 +518,72 @@ def build_manifest(chunks, args, embedding_dim):
     return manifest
 
 
+def build_manifest_v2(chunks, args, embedding_dim, candidate,
+                      source_snapshot_sha256, s7_hashes=None):
+    """Schema-v2 manifest for the release candidates (b56/b567): the v1 base
+    plus the explicit embedding contract, the frozen-source hash, and (b567)
+    the S7 generation hashes."""
+    if candidate not in EMBEDDING_TEXT_VERSIONS:
+        raise ValueError(
+            f"schema-v2 manifests exist only for {sorted(EMBEDDING_TEXT_VERSIONS)}, "
+            f"not {candidate!r}"
+        )
+    if not source_snapshot_sha256:
+        raise ValueError(
+            "a v2 manifest requires source_snapshot_sha256 — candidate builds "
+            "read inputs only from a verified frozen snapshot"
+        )
+    from kb_tokenizer import MAX_SEQ_TOKENS, MODEL_ID, MODEL_REVISION
+
+    manifest = build_manifest(chunks, args, embedding_dim)
+    manifest["schema_version"] = MANIFEST_SCHEMA_VERSION_V2
+    manifest["embedding_contract"] = {
+        "version": 1,
+        "model_id": MODEL_ID,
+        "revision": MODEL_REVISION,
+        "max_seq_length": MAX_SEQ_TOKENS,
+        "distance_metric": "cosine",
+        "normalize_embeddings": False,
+        "embedding_text_version": EMBEDDING_TEXT_VERSIONS[candidate],
+        "s7_enabled": candidate == "b567",
+    }
+    manifest["source_snapshot_sha256"] = source_snapshot_sha256
+    if s7_hashes:
+        manifest.update(s7_hashes)
+    return manifest
+
+
+def write_semantic_inputs(path, plan, combined_hash_inputs):
+    """Write the reproducibility sidecar and return its summary record.
+
+    One row per chunk ({id, raw_document, canonical_metadata,
+    embedding_input_sha256}) plus a trailing summary carrying
+    ``semantic_inputs_sha256`` — the hash of the sorted (id, input-hash) pairs
+    — and the combined-hash inputs (snapshot hash, embedding contract,
+    generator-contract/cache/usage-map hashes) release comparisons gate on.
+    """
+    from companion import sha256_hex
+    from s7_cache import canonical_json
+
+    pairs = sorted([item["id"], sha256_hex(item["embedding_input"])]
+                   for item in plan)
+    summary = {
+        "semantic_inputs_sha256": sha256_hex(canonical_json(pairs)),
+        "combined_hash_inputs": combined_hash_inputs,
+        "row_count": len(plan),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        for item in plan:
+            f.write(json.dumps({
+                "id": item["id"],
+                "raw_document": item["document"],
+                "canonical_metadata": item["metadata"],
+                "embedding_input_sha256": sha256_hex(item["embedding_input"]),
+            }, ensure_ascii=False, sort_keys=True) + "\n")
+        f.write(json.dumps(summary, ensure_ascii=False, sort_keys=True) + "\n")
+    return summary
+
+
 def build_companion_summary(chunks):
     """Summarize the companion (supplemental) chunks, or None if there are none.
 
@@ -372,6 +616,25 @@ def build_companion_summary(chunks):
         "chunk_count": len(companion_chunks),
         "area_counts": dict(area_counts),
     }
+
+
+def _load_eval_fixtures(path):
+    """Load a fixtures-override JSON file into EvalQuery objects (test hook)."""
+    from eval_fixtures import EvalQuery, TargetGroup
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return [
+        EvalQuery(
+            query_id=q["query_id"],
+            query=q.get("query", ""),
+            target_groups=tuple(
+                TargetGroup(g["page_match"], tuple(g.get("markers", ())))
+                for g in q["groups"]
+            ),
+        )
+        for q in data
+    ]
 
 
 def main():
@@ -407,6 +670,35 @@ def main():
     parser.add_argument(
         "--builder-commit", default="",
         help="Builder git commit sha; recorded in manifest.json",
+    )
+    parser.add_argument(
+        "--candidate", choices=CANDIDATES, default="c0",
+        help="kb-25 candidate: c0 = legacy implicit embeddings (default, "
+             "byte-compatible); b5/b56/b567 = S5 chunks with explicit "
+             "pinned-revision embeddings",
+    )
+    parser.add_argument(
+        "--source-snapshot-sha256", default="",
+        help="source_snapshot_sha256 from snapshot.py verify; required for "
+             "b56/b567 (recorded in the schema-v2 manifest)",
+    )
+    parser.add_argument(
+        "--s7-cache", default=None,
+        help="S7 description cache JSONL (required for b567)",
+    )
+    parser.add_argument(
+        "--s7-contract", default=None,
+        help="Generator-contract JSON file (required for b567)",
+    )
+    parser.add_argument(
+        "--semantic-inputs-out", default=None,
+        help="Write the reproducibility semantic-inputs sidecar JSONL here",
+    )
+    parser.add_argument(
+        "--eval-fixtures", default=None,
+        help="JSON file overriding the built-in eval fixtures for the "
+             "pre-embedding marker-integrity gate (testing hook; the default "
+             "is the full visible calibration + exposed regression suites)",
     )
     args = parser.parse_args()
 
@@ -448,16 +740,93 @@ def main():
         print("Re-run chunk_docs.py.")
         sys.exit(1)
 
+    candidate = args.candidate
+    s7 = None
+    if candidate != "c0":
+        # Candidate builds require S5 chunk records throughout.
+        non_s5 = [c["id"] for c in chunks if "source_record_id" not in c]
+        if non_s5:
+            print(f"FAILED: candidate {candidate!r} requires S5 chunk records; "
+                  f"{len(non_s5)} legacy chunk(s), e.g. {non_s5[:3]}. "
+                  "Re-run s5_pipeline.py.")
+            sys.exit(1)
+        if candidate in EMBEDDING_TEXT_VERSIONS and not args.source_snapshot_sha256:
+            print("FAILED: --source-snapshot-sha256 is required for "
+                  f"candidate {candidate!r} (snapshot.py verify prints it).")
+            sys.exit(1)
+        if candidate == "b567":
+            if not args.s7_cache or not args.s7_contract:
+                print("FAILED: candidate b567 requires --s7-cache and "
+                      "--s7-contract (release builds never call an LLM).")
+                sys.exit(1)
+
+        # Visible fixture integrity: after S5, before embedding. Report-only —
+        # never changes split placement; a failure stops the build.
+        from eval_fixtures import check_fixture_integrity
+
+        queries = _load_eval_fixtures(args.eval_fixtures) if args.eval_fixtures else None
+        integrity_errors = check_fixture_integrity(chunks, queries)
+        if integrity_errors:
+            print(f"FAILED: {len(integrity_errors)} fixture integrity error(s):")
+            for err in integrity_errors[:10]:
+                print(f"  - {err}")
+            sys.exit(1)
+
+        if candidate == "b567":
+            from s7_cache import S7Cache, enforce_release
+            from s7_eligibility import chunk_identifiers, is_eligible
+            from kb_tokenizer import HFWordPieceTokenizer
+
+            with open(args.s7_contract, "r", encoding="utf-8") as f:
+                contract = json.load(f)
+            cache = S7Cache.load(args.s7_cache)
+            s7 = {"cache": cache, "contract": contract,
+                  "identifiers_fn": chunk_identifiers}
+            tokenizer = HFWordPieceTokenizer()
+            eligible = [c for c in chunks
+                        if c.get("source_type") == COMPANION_SOURCE_TYPE
+                        and is_eligible(c, tokenizer)]
+            release_errors = enforce_release(
+                cache, eligible, contract,
+                identifiers_fn=chunk_identifiers,
+            )
+            if release_errors:
+                print(f"FAILED: {len(release_errors)} S7 release error(s):")
+                for err in release_errors[:10]:
+                    print(f"  - {err}")
+                sys.exit(1)
+
     # Heavy ML deps are imported only after the cheap input-validation gates
     # above have passed, so a bad JSONL fails fast without loading chromadb.
     import chromadb
     from chromadb.utils import embedding_functions
 
-    print(f"\nInitializing embedding model: {args.model}")
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=args.model
-    )
-    embedding_dim = get_embedding_dim(ef)
+    if candidate == "c0":
+        print(f"\nInitializing embedding model: {args.model}")
+        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=args.model
+        )
+        embedding_dim = get_embedding_dim(ef)
+    else:
+        # Explicit pinned embeddings: the exact model revision the manifest
+        # contract declares, raw documents stored, vectors supplied by us.
+        from kb_tokenizer import (
+            MAX_SEQ_TOKENS,
+            MODEL_ID,
+            MODEL_REVISION,
+            HFWordPieceTokenizer,
+        )
+        from sentence_transformers import SentenceTransformer
+
+        print(f"\nInitializing pinned embedding model: {MODEL_ID}@{MODEL_REVISION[:7]}")
+        model = SentenceTransformer(MODEL_ID, revision=MODEL_REVISION)
+        if model.max_seq_length != MAX_SEQ_TOKENS:
+            print(f"FAILED: loaded model max_seq_length {model.max_seq_length} "
+                  f"!= contract {MAX_SEQ_TOKENS}")
+            sys.exit(1)
+        tokenizer = HFWordPieceTokenizer()
+        plan = compute_embedding_plan(chunks, candidate, tokenizer, s7=s7)
+        embedding_dim = model.get_sentence_embedding_dimension()
 
     print(f"Creating ChromaDB at {args.output}...")
     client = chromadb.PersistentClient(path=args.output)
@@ -469,24 +838,88 @@ def main():
     except Exception:
         pass
 
-    collection = client.create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
-    )
+    if candidate == "c0":
+        collection = client.create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+    else:
+        collection = client.create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"},
+        )
 
     print(f"\nBuilding index (batch size {args.batch_size})...")
     start = time.time()
-    build_index(chunks, collection, args.batch_size, args.verbose)
+    if candidate == "c0":
+        build_index(chunks, collection, args.batch_size, args.verbose)
+    else:
+        total = len(plan)
+        for i in range(0, total, args.batch_size):
+            batch = plan[i:i + args.batch_size]
+            vectors = model.encode(
+                [item["embedding_input"] for item in batch],
+                normalize_embeddings=False,
+                batch_size=min(64, len(batch)),
+            )
+            collection.add(
+                ids=[item["id"] for item in batch],
+                documents=[item["document"] for item in batch],
+                embeddings=[vector.tolist() for vector in vectors],
+                metadatas=[item["metadata"] for item in batch],
+            )
+            print(f"  Indexed {min(i + args.batch_size, total)}/{total} chunks")
     elapsed = time.time() - start
 
     print_stats(len(chunks), args.model, args.output, elapsed, embedding_dim)
 
-    manifest = build_manifest(chunks, args, embedding_dim)
+    s7_hashes = None
+    if candidate == "b567":
+        from companion import sha256_hex as _sha256_hex
+        from s7_cache import (
+            canonical_json,
+            generator_contract_sha256,
+            usage_map,
+        )
+
+        with open(args.s7_cache, "rb") as f:
+            cache_bytes = f.read()
+        mapping = usage_map(s7["contract"], chunks,
+                            identifiers_fn=s7["identifiers_fn"])
+        s7_hashes = {
+            "generator_contract_sha256": generator_contract_sha256(s7["contract"]),
+            "s7_cache_sha256": _sha256_hex(cache_bytes),
+            "usage_map_sha256": _sha256_hex(canonical_json(mapping)),
+        }
+
+    if candidate in EMBEDDING_TEXT_VERSIONS:
+        manifest = build_manifest_v2(
+            chunks, args, embedding_dim, candidate,
+            source_snapshot_sha256=args.source_snapshot_sha256,
+            s7_hashes=s7_hashes,
+        )
+    else:
+        manifest = build_manifest(chunks, args, embedding_dim)
     manifest_path = os.path.join(args.output, "manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     print(f"Wrote manifest: {manifest_path}")
+
+    if args.semantic_inputs_out and candidate != "c0":
+        combined = {
+            "source_snapshot_sha256": args.source_snapshot_sha256,
+            "embedding_contract": manifest.get("embedding_contract"),
+        }
+        if s7_hashes:
+            combined.update({
+                "generator_contract_sha256": s7_hashes["generator_contract_sha256"],
+                "s7_cache_sha256": s7_hashes["s7_cache_sha256"],
+                "usage_map_sha256": s7_hashes["usage_map_sha256"],
+            })
+        summary = write_semantic_inputs(args.semantic_inputs_out, plan, combined)
+        print(f"Wrote semantic inputs: {args.semantic_inputs_out} "
+              f"(semantic_inputs_sha256 {summary['semantic_inputs_sha256'][:12]}…)")
 
     if args.verify:
         # Official queries verify official docs; companion queries verify
