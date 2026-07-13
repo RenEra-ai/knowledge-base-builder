@@ -198,19 +198,25 @@ def test_tilde_fence_marker_and_language_preserved():
 def test_oversized_code_line_splits_at_whitespace_boundary():
     """One code line over a fresh fragment's budget splits at the largest
     whitespace boundary that fits; every resulting fragment is a valid fenced
-    block and the consumed boundary space rides in the preceding span."""
+    block and the consumed boundary space rides in the preceding span.
+
+    The oversized line's leading words BACKFILL the open fragment ("alpha"
+    completes fragment 0 to its 5-token budget) rather than stranding its room
+    — see test_descent_backfills_the_open_fragment.
+    """
     payload = "```\nfoo bar\nalpha beta gamma delta\n```"
     frags = _split(payload, budget=5)
     assert [f.raw_lines for f in frags] == [
-        ["```", "foo bar"],
-        ["alpha beta gamma"],
-        ["delta", "```"],
+        ["```", "foo bar", "alpha"],
+        ["beta gamma delta"],
+        ["```"],
     ]
     assert frags[0].synthetic == {"fence_open": None, "fence_close": "```"}
     assert frags[1].synthetic == {"fence_open": "```", "fence_close": "```"}
     assert frags[2].synthetic == {"fence_open": "```", "fence_close": None}
-    # The space after "gamma" is consumed at the boundary -> preceding span.
-    assert frags[1].spans == [SourceSpan(12, 29)]
+    # The space after "alpha" is consumed at the boundary -> preceding span.
+    assert frags[0].spans == [SourceSpan(0, 18)]
+    assert frags[1].spans == [SourceSpan(18, 35)]
     for frag in frags:
         _assert_fences_balanced(frag)
 
@@ -222,18 +228,42 @@ def test_minified_line_splits_at_codepoint_boundary_multibyte():
     and the byte offsets land on exact 4-byte emoji multiples."""
     payload = "```\n" + "\U0001f680" * 24 + "\n```"   # rocket line = 6 pieces
     frags = _split(payload, budget=3, base_offset=200)
+    # The fence-open line and the first 8 rockets share fragment 0 (3 pieces);
+    # the closing fence rides with the trailing 4 rockets.
     assert [f.raw_lines for f in frags] == [
-        ["```"],
+        ["```", "\U0001f680" * 8],
         ["\U0001f680" * 12],
-        ["\U0001f680" * 12],
-        ["```"],
+        ["\U0001f680" * 4, "```"],
     ]
     # UTF-8 offsets: "```\n" = 4 bytes, each rocket = 4 bytes, "\n" = 1.
-    assert frags[1].spans == [SourceSpan(200 + 4, 200 + 4 + 48)]
-    assert frags[2].spans == [SourceSpan(200 + 52, 200 + 52 + 48 + 1)]  # + closing "\n"
+    assert frags[0].spans == [SourceSpan(200, 200 + 4 + 32)]
+    assert frags[1].spans == [SourceSpan(200 + 36, 200 + 36 + 48)]
     for frag in frags:
         _assert_fences_balanced(frag)
         assert frag.synthetic["fence_open"] == (None if frag is frags[0] else "```")
+
+
+def test_descent_backfills_the_open_fragment_instead_of_stranding_it():
+    """Regression: a unit too big for even a FRESH fragment must be descended
+    WITHOUT first closing the open fragment, so its leading sub-units backfill
+    the room already available.
+
+    Closing first stranded that room and emitted degenerate fragments — a lone
+    emoji, a two-word line — whose embeddings are noise in the corpus.
+    """
+    # "alpha." fits fragment 0 (2 pieces of a 10-piece budget); the following
+    # sentence is far too big for any fragment, so it must be split — and its
+    # first words belong in fragment 0's remaining 8 pieces.
+    long_sentence = " ".join(f"word{i:03d}" for i in range(40))  # 2 pieces each
+    payload = f"alpha.\n{long_sentence}"
+    frags = _split(payload, budget=10)
+
+    assert frags[0].raw_lines[0].startswith("alpha.")
+    # Fragment 0 is filled to its budget, not left at the 2 pieces of "alpha.".
+    assert _TOK.count("\n".join(frags[0].raw_lines)) == 10
+    # No fragment is degenerate while later text remains to be placed.
+    for frag in frags[:-1]:
+        assert _TOK.count("\n".join(frag.raw_lines)) > 5
 
 
 # --- unsplittable spans ---------------------------------------------------------

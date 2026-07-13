@@ -258,6 +258,15 @@ class _Splitter:
         """Budget of the fragment being filled: index == finished count."""
         return self._budget_fn(len(self._finished))
 
+    def _fresh_budget(self):
+        """Budget the NEXT fragment would have (closing the open one, if any)."""
+        index = len(self._finished) + (1 if self._frag_start is not None else 0)
+        return self._budget_fn(index)
+
+    def _fits_fresh(self, start, end):
+        """Would this whole slice fit a fragment of its own?"""
+        return self._count(start, end) <= self._fresh_budget()
+
     def _count(self, start, end):
         return self._tokenizer.count(self._payload[start:end])
 
@@ -313,26 +322,41 @@ class _Splitter:
             unit_start, unit_end = start + rel_start, start + rel_end
             if self._try_append(unit_start, unit_end):
                 continue
-            self._close()
-            if self._try_append(unit_start, unit_end):
+            if self._fits_fresh(unit_start, unit_end):
+                # Tie-break 1: a unit that no longer fits the REMAINING budget
+                # but would fit a fragment of its own moves whole to the next one.
+                self._close()
+                self._try_append(unit_start, unit_end)
                 continue
+            # The unit exceeds even a fresh fragment, so it must be split
+            # anyway (tie-break 2). Descend WITHOUT closing: its leading
+            # sub-units backfill the open fragment's remaining room first.
+            # Closing here instead would strand that room and emit degenerate
+            # fragments (a lone emoji, a two-word line) whose vectors are noise.
             self._place_prose(unit_start, unit_end, level + 1)
 
     def _place_code(self, lines, marker, language, has_close):
         """Place one fenced block: whole if it fits, else line by line, else
         (for one oversized body line) whitespace -> codepoint descent."""
         seg_start, seg_end = lines[0][0], lines[-1][1]
-        for _attempt in ("remaining", "fresh"):
+        if self._try_append(seg_start, seg_end):
+            if not has_close:
+                # Unclosed source fence: the final _close() adds the
+                # synthetic close so the fragment stays valid Markdown.
+                self._in_fence = (marker, language)
+            return
+        if self._fits_fresh(seg_start, seg_end):
+            self._close()
             if self._try_append(seg_start, seg_end):
                 if not has_close:
-                    # Unclosed source fence: the final _close() adds the
-                    # synthetic close so the fragment stays valid Markdown.
                     self._in_fence = (marker, language)
                 return
-            self._close()
+        # The block must be split line by line. Do NOT close first: its leading
+        # lines backfill the open fragment's remaining room (a fragment that
+        # ends inside the fence gets the synthetic close from _close()).
         for line_start, line_end, kind in lines:
             placed = self._try_append(line_start, line_end)
-            if not placed:
+            if not placed and self._fits_fresh(line_start, line_end):
                 self._close()
                 placed = self._try_append(line_start, line_end)
             if not placed:
