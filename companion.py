@@ -220,12 +220,39 @@ def split_markdown_sections(md_text):
     an empty heading. Headings inside fenced code blocks (``` / ~~~) and headings
     deeper than ``###`` are treated as body, never as split points.
     """
+    sections = split_markdown_sections_with_offsets(md_text)
+    return [
+        {"level": sec["level"], "heading": sec["heading"], "body": sec["body"]}
+        for sec in sections
+    ]
+
+
+def split_markdown_sections_with_offsets(md_text):
+    """``split_markdown_sections`` plus each section's exact source location.
+
+    Every section dict additionally carries ``body_start_byte`` /
+    ``body_end_byte``: the UTF-8 byte range of the STRIPPED body within
+    ``md_text`` (``md_text`` sliced by that byte range, decoded, equals
+    ``body`` exactly — the S5 pipeline records source spans against it). An
+    empty body is ``(end, end)`` at the section's start position.
+    """
     lines = md_text.split("\n")
+    # Byte offset of each line's first char (lines were joined by "\n" = 1 byte).
+    line_starts = []
+    pos = 0
+    for line in lines:
+        line_starts.append(pos)
+        pos += len(line.encode("utf-8")) + 1
+
     sections = []
-    current = {"level": 0, "heading": "", "body_lines": []}
+    current = {"level": 0, "heading": "", "body_lines": [], "line_indices": []}
     open_fence = None  # (char, length) while inside a fenced code block
 
-    for line in lines:
+    def _flush(sec):
+        if sec["heading"] or "".join(sec["body_lines"]).strip():
+            sections.append(sec)
+
+    for index, line in enumerate(lines):
         marker = _fence_marker(line)
 
         if open_fence is not None:
@@ -236,32 +263,49 @@ def split_markdown_sections(md_text):
                     and line.strip()[marker[1]:].strip() == ""):
                 open_fence = None
             current["body_lines"].append(line)
+            current["line_indices"].append(index)
             continue
 
         if marker:
             # Opening fence — body content, not a split point.
             open_fence = marker
             current["body_lines"].append(line)
+            current["line_indices"].append(index)
             continue
 
         match = _HEADING_RE.match(line)
         if match:
             # Flush the section in progress before starting a new one.
-            if current["heading"] or "".join(current["body_lines"]).strip():
-                sections.append(current)
+            _flush(current)
             current = {
                 "level": len(match.group(1)),
                 "heading": _clean_heading(match.group(2)),
                 "body_lines": [],
+                "line_indices": [],
             }
         else:
             current["body_lines"].append(line)
+            current["line_indices"].append(index)
 
-    if current["heading"] or "".join(current["body_lines"]).strip():
-        sections.append(current)
+    _flush(current)
 
     for sec in sections:
-        sec["body"] = "\n".join(sec.pop("body_lines")).strip()
+        raw_body = "\n".join(sec.pop("body_lines"))
+        body = raw_body.strip()
+        sec["body"] = body
+        indices = sec.pop("line_indices")
+        if body and indices:
+            region_start = line_starts[indices[0]]
+            # Leading/trailing whitespace stripped from the body is excluded
+            # from the span, so the byte range decodes to ``body`` exactly.
+            lead_ws = len(raw_body) - len(raw_body.lstrip())
+            start = region_start + len(raw_body[:lead_ws].encode("utf-8"))
+            sec["body_start_byte"] = start
+            sec["body_end_byte"] = start + len(body.encode("utf-8"))
+        else:
+            anchor = line_starts[indices[0]] if indices else len(md_text.encode("utf-8"))
+            sec["body_start_byte"] = anchor
+            sec["body_end_byte"] = anchor
     return sections
 
 

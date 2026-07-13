@@ -39,8 +39,12 @@ def _make_sources(tmp_path):
     manifest_path = tmp_path / "companion_manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
+    # Consistent with the manifest so the curation-drift gate passes.
     config_path = tmp_path / "companion_sources.json"
-    config_path.write_text(json.dumps({"repo": manifest["repo"]}), encoding="utf-8")
+    config_path.write_text(
+        json.dumps({"repo": manifest["repo"], "files": [{"path": md_rel}]}),
+        encoding="utf-8",
+    )
 
     return {
         "official_dir": str(official),
@@ -163,3 +167,58 @@ def test_resolve_snapshot_inputs_fails_on_drifted_snapshot(tmp_path):
         f.write("x")
     with pytest.raises(ValueError, match="aaa_page.html"):
         resolve_snapshot_inputs(out_dir)
+
+
+# --- chunk_docs --snapshot CLI gate (snapshot-only input enforcement) -----------
+
+import subprocess
+import sys as _sys
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CHUNK_DOCS = os.path.join(_REPO, "chunk_docs.py")
+
+
+def _run_chunk_docs(args, cwd):
+    return subprocess.run(
+        [_sys.executable, _CHUNK_DOCS] + args,
+        capture_output=True, text=True, cwd=cwd,
+    )
+
+
+def test_chunk_docs_snapshot_flag_aborts_on_drift_before_chunking(tmp_path):
+    out_dir, _ = _freeze(tmp_path)
+    with open(os.path.join(out_dir, "official", "aaa_page.html"), "a") as f:
+        f.write("drift")
+    result = _run_chunk_docs(
+        ["--snapshot", out_dir, "--output", str(tmp_path / "chunks.jsonl")],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 1
+    assert "snapshot verification" in result.stdout
+    assert not os.path.exists(tmp_path / "chunks.jsonl")
+
+
+def test_chunk_docs_snapshot_flag_rejects_explicit_input_overrides(tmp_path):
+    out_dir, _ = _freeze(tmp_path)
+    result = _run_chunk_docs(
+        ["--snapshot", out_dir, "--input", "somewhere_else/",
+         "--output", str(tmp_path / "chunks.jsonl")],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 1
+    assert "mutually exclusive" in result.stdout
+
+
+def test_chunk_docs_snapshot_flag_chunks_from_the_snapshot(tmp_path):
+    out_dir, _ = _freeze(tmp_path)
+    output = tmp_path / "chunks.jsonl"
+    result = _run_chunk_docs(
+        ["--snapshot", out_dir, "--output", str(output), "--min-tokens", "0"],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    chunks = [json.loads(line) for line in output.read_text().splitlines() if line]
+    # The snapshot supplies BOTH corpora: official pages and the verified
+    # companion staging + manifest.
+    source_types = {c["source_type"] for c in chunks}
+    assert source_types == {"official", "companion_reference"}

@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import sys
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -551,13 +552,18 @@ def chunk_markdown_file(md_path, entry, upstream, min_tokens, max_tokens, verbos
     return chunks
 
 
-def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbose=False,
-                      config_path=None):
-    """Load a companion manifest and chunk every staged Markdown file it lists.
+def verified_companion_texts(manifest_path, staging_dir, config_path=None):
+    """Load the companion manifest and return every staged file's VERIFIED text.
+
+    The single fail-closed gate both chunking pipelines (legacy and S5) run
+    before ingesting companion content. Returns ``(upstream, entries)`` where
+    ``upstream`` is ``{"repo", "commit"}`` and ``entries`` is a list of
+    ``(entry, staged_text)`` pairs — the exact strings that hashed to the
+    manifest's sha256, so the verified bytes ARE the ingested bytes.
 
     Fails if the manifest or a staged file is missing (every companion source is
     mandatory), or if a staged file's content does not hash to the sha256 the manifest
-    recorded for it; warns if an allowlisted file yields no chunks.
+    recorded for it.
 
     Both checks exist because every companion chunk is stamped with the pinned upstream
     commit and raw_url. Anything that reaches chunking must therefore be exactly what
@@ -598,7 +604,7 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
             )
 
     upstream = {"repo": manifest["repo"], "commit": manifest["commit"]}
-    all_companion = []
+    entries = []
     for entry in manifest["files"]:
         path = entry["path"]
         # Re-validate even though fetch_companion already did: an absolute or
@@ -638,9 +644,24 @@ def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbos
                 "it would stamp content that was never fetched with the pinned "
                 "upstream commit and raw_url. Re-run fetch_companion.py."
             )
-        # Chunk the exact text we just hashed rather than re-reading md_path, so the
-        # verified bytes ARE the ingested bytes — no window for the file to change
-        # between the check and the read.
+        entries.append((entry, staged_text))
+    return upstream, entries
+
+
+def process_companion(manifest_path, staging_dir, min_tokens, max_tokens, verbose=False,
+                      config_path=None):
+    """Chunk every verified staged companion file (legacy splitter path).
+
+    Verification lives in ``verified_companion_texts`` (shared with the S5
+    pipeline); this wrapper chunks the exact verified texts so the verified
+    bytes ARE the ingested bytes. Warns if an allowlisted file yields no chunks.
+    """
+    upstream, entries = verified_companion_texts(
+        manifest_path, staging_dir, config_path=config_path
+    )
+    all_companion = []
+    for entry, staged_text in entries:
+        md_path = os.path.join(staging_dir, entry["path"])
         file_chunks = chunk_markdown_file(
             md_path, entry, upstream, min_tokens, max_tokens, verbose,
             text=staged_text,
@@ -675,7 +696,39 @@ def main():
              "the build fails if the manifest was written before a policy edit. "
              "Pass '' to skip the check",
     )
+    parser.add_argument(
+        "--snapshot", default=None,
+        help="Frozen source snapshot directory (snapshot.py freeze). Verifies the "
+             "snapshot, then resolves ALL inputs from it; mutually exclusive with "
+             "--input/--companion-input/--companion-manifest/--companion-config",
+    )
     args = parser.parse_args()
+
+    if args.snapshot:
+        # Candidate builds read inputs ONLY from a verified frozen snapshot;
+        # mixing in live paths would silently reintroduce source drift.
+        overridden = [
+            flag for flag, value, default in (
+                ("--input", args.input, DEFAULT_INPUT),
+                ("--companion-input", args.companion_input, DEFAULT_COMPANION_STAGING),
+                ("--companion-manifest", args.companion_manifest, None),
+                ("--companion-config", args.companion_config, DEFAULT_COMPANION_CONFIG),
+            ) if value != default
+        ]
+        if overridden:
+            print(f"FAILED: --snapshot is mutually exclusive with {overridden}")
+            sys.exit(1)
+        from snapshot import resolve_snapshot_inputs
+
+        try:
+            inputs = resolve_snapshot_inputs(args.snapshot)
+        except ValueError as e:
+            print(f"FAILED: snapshot verification: {e}")
+            sys.exit(1)
+        args.input = inputs["input"]
+        args.companion_input = inputs["companion_input"]
+        args.companion_manifest = inputs["companion_manifest"]
+        args.companion_config = inputs["companion_config"]
 
     all_chunks = []
     category_counts = {}
