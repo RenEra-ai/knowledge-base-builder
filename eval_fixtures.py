@@ -138,11 +138,11 @@ EXPOSED_REGRESSION = [
        TargetGroup(_MAP_COMPONENT, ("fromTagListKey",))),
     _q("E05", "Where are an MCP tool's JSON input schema and output cookie "
               "configured?",
-       TargetGroup(_MCP_OPERATION, ("JSON schema",)),
+       TargetGroup(_MCP_OPERATION, ("JSON Schema",)),
        TargetGroup(_MCP_OPERATION, ('<cookie role="OUTPUT">',))),
     _q("E06", "How do I add a qualifier-based instance identifier to a repeating "
               "XML profile element?",
-       TargetGroup("instance identifier",
+       TargetGroup("identifier instance to an XML profile",
                    ("Use the Data Elements tab to add instance identifiers",))),
 ]
 
