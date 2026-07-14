@@ -1,0 +1,102 @@
+name: Evaluate KB Candidate
+
+# Release-grade evaluation: run every fixture query through the PINNED Track A
+# KbService against a candidate corpus, on the pinned CI runner (CPU-only,
+# single-thread via eval_harness.pin_determinism). Produces a run bundle
+# (results.json + manifest.json + semantic_inputs.jsonl) that the B56/B567 gate
+# functions consume. A separate workflow so a candidate can be evaluated
+# without rebuilding it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: >-
+          Run id of a build-knowledge-base run whose boomi-knowledge-db artifact
+          to evaluate.
+        type: string
+        required: true
+      candidate:
+        description: Candidate label (c0 | b5 | b56 | b567) for the results bundle.
+        type: string
+        required: true
+      mcp_ref:
+        description: >-
+          boomi-mcp-server ref providing the pinned Track A KbService
+          (default main).
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.candidate }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout knowledge-base-builder
+      uses: actions/checkout@v4
+
+    - name: Checkout boomi-mcp-server (Track A KbService)
+      uses: actions/checkout@v4
+      with:
+        repository: RenEra-ai/boomi-mcp-server
+        ref: ${{ inputs.mcp_ref }}
+        path: boomi-mcp-server
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Cache sentence-transformers model
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/torch/sentence_transformers
+        key: st-all-MiniLM-L6-v2
+
+    - name: Install pinned dependencies
+      run: |
+        # knowledge-base-builder pins the release ML stack (sentence-transformers
+        # 5.6.0, chromadb 1.5.9); the Track A kb submodule imports only stdlib at
+        # module load, so no boomi-mcp-server requirements are needed here.
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Download candidate corpus
+      uses: actions/download-artifact@v4
+      with:
+        name: boomi-knowledge-db
+        path: .
+        run-id: ${{ inputs.build_run_id }}
+        github-token: ${{ github.token }}
+
+    - name: Unpack candidate corpus
+      run: tar -xzf boomi_knowledge_db.tar.gz
+
+    - name: Evaluate through pinned Track A KbService
+      run: |
+        mkdir -p "runs/${{ inputs.candidate }}"
+        python eval_harness.py run \
+          --db-path boomi_knowledge_db \
+          --out "runs/${{ inputs.candidate }}/results.json" \
+          --server-path boomi-mcp-server
+        # Assemble a run bundle for eval_harness compare + the gate functions.
+        # semantic_inputs.jsonl is emitted only by the s5 candidates (b5/b56/b567).
+        cp boomi_knowledge_db/manifest.json "runs/${{ inputs.candidate }}/manifest.json"
+        if [ -f boomi_knowledge_db/semantic_inputs.jsonl ]; then
+          cp boomi_knowledge_db/semantic_inputs.jsonl "runs/${{ inputs.candidate }}/semantic_inputs.jsonl"
+        fi
+
+    - name: Upload eval bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: eval-${{ inputs.candidate }}
+        path: runs/${{ inputs.candidate }}/
+        retention-days: 90
