@@ -114,3 +114,17 @@ def test_snapshot_freeze_step_still_present():
     text = _workflow_text()
     assert "snapshot.py freeze" in text
     assert "snapshot.py verify" in text
+
+
+def test_verify_is_a_toggle_defaulting_on():
+    """build_index --verify is a coarse HNSW-approximate smoke gate; it must be
+    switchable off so a borderline query can't block producing an artifact for
+    the authoritative eval-harness gates. Default stays on."""
+    block = _dispatch_inputs_block(_workflow_text())
+    assert "verify:" in block
+    verify_seg = block.split("verify:", 1)[1]
+    assert "type: boolean" in verify_seg
+    assert "default: true" in verify_seg
+    # the build steps gate the --verify flag on the input.
+    text = _workflow_text()
+    assert 'if [ "${{ inputs.verify }}" = "false" ]; then VERIFY=""; fi' in text

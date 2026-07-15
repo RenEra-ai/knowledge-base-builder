@@ -47,6 +47,14 @@ on:
           kb-<run_number>. Only used when publish is true.
         type: string
         default: ''
+      verify:
+        description: >-
+          Run build_index's coarse post-build smoke queries as a hard gate
+          (default true). Set false to still produce the artifact when the
+          coarse HNSW-approximate check flags a borderline query — the
+          authoritative retrieval gate is the eval harness, not this smoke test.
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -318,7 +326,9 @@ jobs:
     - name: Build semantic index (legacy)
       if: inputs.mode != 'freeze' && inputs.pipeline != 's5'
       run: |
-        python build_index.py --verify \
+        VERIFY="--verify"
+        if [ "${{ inputs.verify }}" = "false" ]; then VERIFY=""; fi
+        python build_index.py $VERIFY \
           --artifact-tag "kb-${{ github.run_number }}" \
           --builder-commit "${{ github.sha }}"
 
@@ -329,7 +339,9 @@ jobs:
         if [ "${{ inputs.candidate }}" = "b567" ]; then
           EXTRA="--s7-cache s7_cache.jsonl --s7-contract s7_contract.json"
         fi
-        python build_index.py --verify \
+        VERIFY="--verify"
+        if [ "${{ inputs.verify }}" = "false" ]; then VERIFY=""; fi
+        python build_index.py $VERIFY \
           --candidate "${{ inputs.candidate }}" \
           --source-snapshot-sha256 "$SOURCE_SNAPSHOT_SHA256" \
           --semantic-inputs-out boomi_knowledge_db/semantic_inputs.jsonl \
