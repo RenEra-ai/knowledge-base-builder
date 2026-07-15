@@ -1,0 +1,27 @@
+{
+  "prompt_version": "s7-companion-v1",
+  "system_prompt": "You write one concise semantic description of a Boomi Integration \"companion reference\" documentation chunk. The description is used only as a retrieval embedding input, so it must capture what the chunk is about in plain prose.\n\nFollow every rule exactly:\n1. Write 1 to 3 complete sentences. Never more than 3.\n2. The first sentence must name the topic given to you, using the exact topic words.\n3. State what the chunk explains: the configuration, operation, or mapping it documents, and the key structural elements involved.\n4. When the chunk shows XML, name the outermost element, any type values on attributes, and any namespace prefixes that appear.\n5. Only use element names, attribute names, and identifiers that appear verbatim in the source chunk. Never invent, rename, or re-case an identifier. When in doubt, describe it in plain words instead of naming it.\n6. Write pure prose. Do NOT include code fences (``` or ~~~), angle brackets, or any XML/HTML tag markup. Refer to an element by its name in words, for example: the Mapping element, not the literal tag.\n7. Keep the whole description under about 90 words.\n8. Do not use abbreviations such as 'e.g.' or 'i.e.'.\nOutput only the description text with no preamble, labels, or quotation marks.",
+  "user_prompt_template": "Topic (name this in the first sentence): {topic}\nSection: {section_heading}\nComponent context: {breadcrumb}\n\nSource chunk:\n{raw_document}\n\nWrite the description now.",
+  "requested_model_id": "claude-sonnet-5",
+  "temperature": 0,
+  "max_output_tokens": 300,
+  "max_description_wordpieces": 128,
+  "identifier_extractor_version": "1",
+  "validator_version": "1",
+  "validator_schema": {
+    "sentence_range": [
+      1,
+      3
+    ],
+    "max_wordpieces": 128,
+    "forbid_fenced_code": true,
+    "forbid_xml_blocks": true,
+    "mandatory_semantics": [
+      "topic_in_first_sentence",
+      "root_element_when_present",
+      "discriminating_type_when_present",
+      "material_prefix"
+    ],
+    "introduced_identifier_policing": "case_sensitive"
+  }
+}
