@@ -298,7 +298,13 @@ _NON_DOCUMENT_TAGS = ("style", "script")
 
 
 def _strip_non_document_assets(soup):
-    """Remove <style>/<script> subtrees from ``soup`` in place."""
+    """Remove <style>/<script> subtrees from ``soup`` in place.
+
+    Call this on the WHOLE soup before anything reads text per element: the
+    leak only exists for ``get_text()`` called on the asset tag itself, so any
+    future caller that sections raw HTML and reads elements individually needs
+    this first or the asset body returns as prose again.
+    """
     for tag in soup.find_all(_NON_DOCUMENT_TAGS):
         tag.decompose()
 

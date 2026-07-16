@@ -245,6 +245,23 @@ def test_style_and_script_blocks_never_reach_the_official_corpus(tmp_path):
     assert "A 200 response returns the file metadata." in blob
 
 
+def test_json_ld_metadata_is_stripped_with_the_other_script_assets(tmp_path):
+    """schema.org metadata is machine annotation, not page prose: it rides the
+    same <script> strip rather than being embedded as a chunk of JSON."""
+    (tmp_path / "ld.html").write_text(
+        "<h1>Deploy a process</h1>\n"
+        '<script type="application/ld+json">'
+        '{"@context":"https://schema.org","@type":"TechArticle"}</script>\n'
+        "<p>Attach the process to an environment first.</p>\n",
+        encoding="utf-8",
+    )
+    chunks = build_official_chunks(str(tmp_path), _TOK)
+    blob = "\n".join(c["content"] for c in chunks)
+    assert "schema.org" not in blob
+    assert "TechArticle" not in blob
+    assert "Attach the process to an environment first." in blob
+
+
 # --- full pipeline + CLI ----------------------------------------------------------
 
 def _stage_companion(tmp_path):
