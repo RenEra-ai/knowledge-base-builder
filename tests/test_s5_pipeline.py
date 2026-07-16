@@ -214,6 +214,37 @@ def test_official_section_spans_decode_from_the_page_record(tmp_path):
         assert prev["source_end_byte"] <= nxt["source_start_byte"]
 
 
+# Styled-components pages (developer.boomi.com) carry their stylesheet inline in
+# <style> tags between the headings. BeautifulSoup only hides a Stylesheet string
+# from get_text() when it is called on an ANCESTOR: called on the <style> tag
+# itself — which is what elements_to_text does for every top-level section
+# element — it returns the CSS as if it were prose.
+_STYLED_HTML = """<h1>File Sharing API</h1>
+<p>Upload a file to the shared folder.</p>
+<style data-styled="active">html:not([data-theme='dark']) .eqlrrV{width:calc(100% - 40%);padding:0 40px;}/*!sc*/
+@media print,screen and (max-width: 130rem){html .fidpWx{width:100%;}}/*!sc*/</style>
+<h2>Response codes</h2>
+<script>window.__DOCS__ = {build: 1};</script>
+<p>A 200 response returns the file metadata.</p>
+"""
+
+
+def test_style_and_script_blocks_never_reach_the_official_corpus(tmp_path):
+    """Browser assets are not documentation: a <style>/<script> body must never
+    be embedded as document text (it floods retrieval with CSS vectors)."""
+    (tmp_path / "api.html").write_text(_STYLED_HTML, encoding="utf-8")
+    chunks = build_official_chunks(str(tmp_path), _TOK)
+    assert chunks
+    blob = "\n".join(c["content"] for c in chunks)
+    assert "/*!sc*/" not in blob
+    assert "data-theme" not in blob
+    assert "padding" not in blob
+    assert "window.__DOCS__" not in blob
+    # The real prose on the same page still survives.
+    assert "Upload a file to the shared folder." in blob
+    assert "A 200 response returns the file metadata." in blob
+
+
 # --- full pipeline + CLI ----------------------------------------------------------
 
 def _stage_companion(tmp_path):

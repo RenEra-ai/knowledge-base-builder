@@ -286,6 +286,23 @@ def chunk_companion_text(entry, upstream, text, tokenizer):
 
 # --- official path -----------------------------------------------------------------
 
+# Browser assets, never documentation. They must be dropped BEFORE sectioning:
+# ``elements_to_text`` calls ``get_text()`` on each top-level section element,
+# and BeautifulSoup only hides a Stylesheet/Script string from ``get_text()``
+# when it is called on an ANCESTOR — called on the <style>/<script> tag itself
+# it returns the asset body verbatim. The legacy chunker never hit this because
+# its oversized sections are re-parsed by ``split_html_on_paragraphs`` and read
+# back through the soup ROOT, which drops those strings; S5 splits the extracted
+# text directly, so without this the stylesheet is embedded as prose.
+_NON_DOCUMENT_TAGS = ("style", "script")
+
+
+def _strip_non_document_assets(soup):
+    """Remove <style>/<script> subtrees from ``soup`` in place."""
+    for tag in soup.find_all(_NON_DOCUMENT_TAGS):
+        tag.decompose()
+
+
 def _official_sections(input_dir):
     """Extract per-section text from every HTML file, in deterministic order."""
     from bs4 import BeautifulSoup  # chunk_docs already depends on bs4
@@ -296,6 +313,7 @@ def _official_sections(input_dir):
             continue
         with open(os.path.join(input_dir, filename), "r", encoding="utf-8") as f:
             soup = BeautifulSoup(f.read(), "html.parser")
+        _strip_non_document_assets(soup)
         sections = split_on_headings(soup)
         page_title = filename
         for sec in sections:
