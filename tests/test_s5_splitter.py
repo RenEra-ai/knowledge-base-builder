@@ -94,6 +94,20 @@ def test_short_payload_single_fragment():
     assert frags[0].synthetic == {"fence_open": None, "fence_close": None}
 
 
+def test_payload_exactly_at_budget_is_not_split():
+    """The keep-whole boundary: a payload costing EXACTLY its budget already
+    stays one fragment, and one token more is what forces the split. Pins the
+    'keep a section whole when it fits' behaviour as inherent to the greedy
+    fill, so a future budget change cannot silently start fragmenting a
+    section that fits. Each 4-char word costs exactly 1 FakeWordPiece token."""
+    payload = " ".join(["abcd"] * 12)
+    assert _TOK.count(payload) == 12
+
+    assert len(_split(payload, budget=12)) == 1      # exactly at budget
+    assert len(_split(payload, budget=13)) == 1      # under budget
+    assert len(_split(payload, budget=11)) == 2      # one token over -> splits
+
+
 # --- prose split levels ---------------------------------------------------------
 
 def test_paragraph_split_attaches_separator_to_leading_fragment():
